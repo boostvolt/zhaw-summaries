@@ -24,4 +24,18 @@ Collection of summaries from my computer science studies at the ZHAW School of E
 
 <details>
   <summary>Information und Codierung</summary>
+
+  ## Themen
+  1. [Kombinatorische Logik](1.%20Semester/Information%20und%20Codierung/Fehlererkennung.pdf)
+  2. [Sequentielle Logik](1.%20Semester/Information%20und%20Codierung/Sequentielle%20Logik.pdf)
+  3. [Zahlensysteme](1.%20Semester/Information%20und%20Codierung/Zahlensysteme.pdf)
+  4. [Informationstheorie](1.%20Semester/Information%20und%20Codierung/Informationstheorie.pdf)
+  5. [Quellencodierung](1.%20Semester/Information%20und%20Codierung/Quellencodierung.pdf)
+  6. [JPEG](1.%20Semester/Information%20und%20Codierung/JPEG.pdf)
+  7. [Audiocodierung](1.%20Semester/Information%20und%20Codierung/Audiocodierung.pdf)
+  8. [Kanalcodierung](1.%20Semester/Information%20und%20Codierung/Kanalcodierung.pdf)
+  9. [Fehlererkennung](1.%20Semester/Information%20und%20Codierung/Fehlererkennung.pdf)
+  10. [Fehlerkorrektur](1.%20Semester/Information%20und%20Codierung/Fehlerkorrektur.pdf)
+  11. [Faltungscode](1.%20Semester/Information%20und%20Codierung/Faltungscodes.pdf)
+
 </details>
