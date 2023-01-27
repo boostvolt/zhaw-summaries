@@ -6,6 +6,19 @@ Collection of summaries from my computer science studies at the ZHAW School of E
 ## 1. Semester
 <details>
   <summary>Analysis 1</summary>
+
+  ## Themen
+  1. [Funktionen](1.%20Semester/Analysis/Funktionen.pdf)
+  2. [Polynome](1.%20Semester/Analysis/Polynome.pdf)
+  3. [Ableitungen](1.%20Semester/Analysis/Ableitungen.pdf)
+  4. [Integrale](1.%20Semester/Analysis/Integrale.pdf)
+  5. [Folgen](1.%20Semester/Analysis/Folgen.pdf)
+  6. [Reihen](1.%20Semester/Analysis/Reihen.pdf )
+  7. [Grenzwerte von Funktionen](1.%20Semester/Analysis/Grenzwerte%20von%20Funktionen.pdf)
+  8. [Stetigkeit](1.%20Semester/Analysis/Stetigkeit.pdf)
+  9. [Gebrochenrationale Funktionen](1.%20Semester/Analysis/Gebrochenrationale%20Funktionen.pdf)
+  10. [Kurvenpunkte](1.%20Semester/Analysis/Kurvenpunkte.pdf)
+  11. [Kurvendiskussion](1.%20Semester/Analysis/Kurvendiskussion.pdf)
 </details>
 
 <details>
