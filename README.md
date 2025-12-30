@@ -17,3 +17,5 @@ Collection of summaries from my computer science studies at the ZHAW School of E
 - Höhere Mathematik
 - Stochastik und Statistik
 
+## 7. Semester
+- Software & System Security 1 (based on [stanlrt/zhaw-sws-cheatsheet](https://github.com/stanlrt/zhaw-sws-cheatsheet))
