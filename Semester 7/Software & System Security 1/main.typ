@@ -1,11 +1,6 @@
-#import "lib.typ": *
+#import "../../packages/cheatsheet/src/lib.typ": *
 
-#set text(font: "Helvetica")
-#set text(
-  lang: "en",
-  region: "gb",
-)
-
+#set text(font: "Helvetica", lang: "en", region: "gb")
 
 #let author = "Jan Kott"
 #let title = "Software & System Security 1"
@@ -24,7 +19,6 @@
   y-margin: 20pt,
   num-columns: 4,
   column-gutter: 2pt,
-  numbered-units: false,
 )
 
 = Basics
@@ -83,7 +77,6 @@
 ])
 
 = 7 (+1) Kingdoms of Software Security Errors (SDL 3 & 4)
-
 #concept-block(body: [
   #inline("1. Input Validation & Representation")
   Encoding can bypass validation (same data, different representation).
@@ -491,7 +484,7 @@
   Used JPA directly via class `EntityManager`and used JPQL query using string concatenation. ```sql no-match%' OR '%' = '```
   ```java
   public class ProductVulnerableRepository {
-    @Persis§§ tenceContext
+    @PersistenceContext
     private EntityManager entityManager;
     public List<Product> findByDescriptionContaining(String description) {
       Query query = entityManager.createQuery("SELECT p FROM Product p

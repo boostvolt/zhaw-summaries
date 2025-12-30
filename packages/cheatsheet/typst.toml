@@ -1,0 +1,11 @@
+[package]
+name = "cheatsheet"
+version = "0.1.0"
+entrypoint = "src/lib.typ"
+authors = ["Jan Kott <https://github.com/boostvolt>"]
+license = "MIT"
+description = "Cheatsheet template with colored sections and concept blocks"
+repository = "https://github.com/boostvolt/zhaw-summaries"
+keywords = ["cheatsheet", "summary", "template", "columns", "exam"]
+categories = ["layout", "components"]
+compiler = "0.12.0"
