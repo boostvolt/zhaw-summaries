@@ -152,6 +152,7 @@
   - *Counter*:
     - *Prepared statements*: Query parsed with `?` placeholders, input bound separately → always data, never code
     - *Escaping* (weaker): Transform `'` → `\'`, error-prone (encoding issues, incomplete escaping)
+
   #subinline("OS Command Injection")
   - *Cause*: App executes OS commands with user input (Java `Runtime.exec()`, PHP `system()`)
   - *Testing*: Find input used in commands (e.g., filename field), append command separator:
@@ -159,11 +160,13 @@
     - Windows: ```sh & ipconfig```
     - If quoted path: close quote first ```sh "; whoami```
   - *Counter*: Use IO classes instead of OS runtime, whitelist allowed chars, minimal privileges
+
   #subinline("JSON/XML Injection")
   - *Cause*: App builds JSON/XML by inserting user input into template
   - *Attack*: Inject closing chars + new key/element → last occurrence wins
     - JSON: `myPassword","admin":"true` | XML: `</password><admin>1</admin>`
   - *Counter*: Escape/blacklist special chars (`"`, `{`, `}`, `<`, `>`)
+
   #subinline("XXE (XML External Entity)")
   - *Cause*: XML parser processes external entity references in DOCTYPE
   - *Attack*: Send crafted XML via POST with entity pointing to resource:
@@ -176,92 +179,86 @@
 
   #inline("Authentication & Session")
   #subinline("Broken Authentication")
-  - Attacker gets credentials (weak pw, reset pw)
-  - Prerequ: unlimited login attempts allowed
-  - *Brute-force*: try common usernames and pws, email enumeration (time or msg), create account and see if email taken. *Remove cookie headers for new session* \
-    *Counter:* vague msg ("Login failed"), CAPTCHA to rate limit accnt creation
-  - *Pw reset*:
-    1. Attck calls Amazon and usurps using security quest (name, email and billing address) to log-in
-    2. Adds credit card
-    3. Calls again, then adds 2nd email
-    4. Uses 2nd email to pw reset, sets own pw \
-    *Counter:* no reset pw feat and force phone call, use hard security questions, issue temp new pw, issue unique pw reset lin
-  #subinline("Broken Session Management")
-  - Attacker gets session ID (guess, exposed, timeout issue, bad rotation, fixation...)
-  - Session ID: random, used to ID user, generated when logged in
-  - *Session fixation*: Attacker tricks the user into using the web app with their (attack) session ID, e.g. by sending a URL with the session ID. Then attacker waits for user to log in, add credit card... \
-    *Counter:* long random 128bit UIDs, change ID for each login, use cookies not URL, use session timeouts (10min)
+  - *Username enumeration*: Find valid usernames before brute-forcing
+    - Login behaves differently for existing/non-existing users (message, response time)
+    - Account creation: app complains if username already taken
+    - *Counter*: Vague error messages ("Login failed"), CAPTCHA on account creation
+  - *Online brute-force*:
+    - *Prerequisite*: Unlimited login attempts without account lockout
+    - Burp Intruder: Capture login, mark username + password, remove Cookie header, *Cluster bomb* attack
+    - Find valid credentials: Look for *outliers* (different status code or response length)
+    - *Counter*: Rate limiting (e.g., 60s delay after 3 failures). Do NOT lock accounts → enables DoS (Denial of Service). Enforce password quality + check against common password lists
+  - *Password reset*: Security questions often guessable/findable, can chain weak resets across providers
+    - *Counter*: No self-service reset for high-value apps, hard security questions, temp password/link to registered email (valid once, short expiry)
 
-    #inline("XSS (Cross-Site Scripting)")
-    Inject own JS code that is executed in other user's browser, without having to modify server code
-    #subinline("Stored (persist)")
-    Attacker places attack script directly as normal data in the web app (e.g. as a post comment). When user views it, browser executes the `script` tag.
-    #subinline("Reflected (non-persist)")
-    1. Make user click a link that makes server send back malicious script (e.g. as search query result: `http://www.xyz.com/search.asp?searchString=<script>ATTACK CODE</script>"`)
-    2. App displays "Search results for ...". The script tag is added to DOM and executed, not displayed.
-    - *Note*: both require poor serve code (no sanitation), storing+displaying of data
-    - *Test*: `<script>alert("XSS worked");</script>`
-    // #image("xssjack.png", width: 90%)
-    Can make form submission *automatic* by putting `send_postdata()` in a script tag \
-    *Counters to reflected:*
-    - replace `<script>alert("XSS");</script>` with `&lt;script&gt;alert(&quot;XSS&quot;);&lt;/script&gt;`
-    - *XSS Auditor* detects that the JS code returned by server is the same as the one sent by the browser's previous REST request (*not in Firefox*). Can be bypassed with a local proxy.  (diff emitting address)
-    - CSP: specify which web content can be loaded from which locations (domains or hosts). ` Content-Security-Policy: default-src 'self'; img-src *; media-src media1.com media2.com; script-src scripts.supersecure.com`: same, imgs from anywhere, audio/video from media1 and media2, script from scripts.supersecure.com.
-    #subinline("DOM-based XSS")
-    Server not involved.
-    - Variant 1 (`unescape`):
-      0. App displays `document.location.href` to the user, *using `unescape()`*
-      1. Attacker makes user click `ubuntu.test/attackdemo/general/DOMbased_XSS1.html#<script>alert("XSS");</script>`
-      2. App adds script to DOM, which is executed but not displayed
-      *Note*: cannot be caught by server bc the `#` is not included in the request. It doesn't work without `unescape` bc the characters will be URL-encoded.
-    - Variant 2 (`eval`):
-      0. ```js <script>
-          var data =  document.location.href.substring(document.location.href.lastIndexOf("data=") + 5);
-          var compute = "13 * " + data;
-          var result = eval(compute);
-          document.write(result);
-        </script>```
-      1. Click `ubuntu.test/attackdemo/general/DOMbased_XSS3.html?data=19#data=19;alert('XSS');`
-      2. App reads last ocuurence of `data`: `data=19;alert('XSS');`
-      3. Eval computes `13*19; alert("XSS");`
-      *Note*: cannot be caught by server bc the `#` is not included in the request. `unescape` not used so `>`, `<` and `"` cannot be used (bc URL-encoded).
-    - *Counter*: avoid `unescape` and `eval`, avoid using JS to render elements controlled by user,
-    #inline("Broken Access Control")
-    Access data or execute actions for which attacker isn't authorised
-    #subinline("Function level")
-    Access unauthorised function. E.g.: `/admin/post` EP does not check if user is actually admin
-    #subinline("Object level")
-    Attacker can use an authorised function in a manner that gives access to unauthorised objects (resources) \
-    E.g.: non-randomised resource IDs (username, filename, PID...) \
-    *Counter*: auth checks for every action and resource access, don't include resource IDs in URL or requests
-    #inline("Cross-Site Request Forgery (CSRF)")
-    Force another user to execute an unwanted action while they are authenticated
-    - *GET*:
-      0. Victim is logged into `shop.com`
-      1. Victim clicks on bad `attacker.com` link, which display an image: `<img src="https://shop.com/transfer?amount=1000&to=attacker" width="1" height="1">`
-      2. The image triggers a GET request to `shop.com`. Browser automatically attaches the `shop.com` cookie, so the request is valid.
-    - *POST*:
-      0. Victim is logged into `shop.com`
-      1. Victim clicks on bad `attacker.com` link, which contains a 0x0 Iframe, which contains an auto-submitting form
-    - *`fetch`*
-      ```js
-      <script>
-          fetch("shop.com", {
-            method: "POST",
-            credentials: "include",
-            headers: {"Content-Type": "application/x-www-form-urlencoded"},
-            body: "title=ATTACK&message=SUCCESS&SUBMIT=submit"
-          });
-      </script>
-      ```
-      *Note:* works bc GET and POST are not subject to the Same Origin Policy
-    - *Counter*:
-      - Use user session token stored in session storage. Pass it in REST bodies. Compare sent, received and stored tokens.
-      - `Set-Cookie: SameSite`. `None` cookies are attached to all x-site requs, `Lax` cookies attached to GET x-site requs, `Strict` never attached. `lax` good but must ensure GET requs do not modify app state.
-    #inline("Testing tools")
-    - *ZAP*: Scans all requests then tries famous vulnes. But uses fixed vals that can block the app (e.g. incorrect form values)
-    - *Fortify*: static code analyser. Doesnt see SQL injection or XSS.
-    - *Spotbug*: binary (JAR) analyser
+  #subinline("Broken Session Management")
+  - *Session ID guessing*: Test for weak/predictable session IDs
+    - Burp Sequencer: Collect many session IDs, analyze randomness (entropy)
+    - Good: ≈115 bits entropy. Poor: ≈2 bits = easily guessable
+  - *Session fixation*: Attacker gives own session ID to victim
+    - Works if app supports session ID in URL (e.g., `;jsessionid=...`)
+    - Basic: Attacker logged in → sends link with session ID → victim uses attacker's account → victim adds credit card → attacker sees it
+    - *Powerful variant*: Attacker creates unauthenticated session → victim clicks link → victim logs in → if session ID not rotated, attacker now has authenticated session
+  - *Counter*:
+    - Use long random session IDs (≥128 bits entropy)
+    - *Change session ID after login* (prevents fixation)
+    - Only use cookies for session ID (not URL)
+    - Session inactivity timeout (e.g., 10 min)
+
+  #inline("XSS (Cross-Site Scripting)")
+  *Core idea*: Attacker injects JS code into web page viewed by other users → JS executes in victim's browser
+
+  - *Attack possibilities*: Steal cookies (`document.cookie`), fake login form, send requests in victim's session
+  - *POST via XSS*: Hidden form + auto-submit (`document.forms[0].submit()`)
+  - *Testing*: ```js <script>alert("XSS");</script>``` → if popup appears, vulnerable
+
+  #subinline("Reflected (Server) XSS")
+  - Victim clicks link with JS in parameter → server reflects JS back → browser executes it
+  - Example: `http://xyz.com/search?q=<script>...</script>`
+  - *Requires*: App doesn't validate input AND doesn't sanitize output
+
+  #subinline("Stored (Server) XSS")
+  - Attacker stores JS permanently in app (forum post, comment, profile)
+  - Victim views page → JS executes (no link click needed)
+
+  #subinline("XSS Countermeasures")
+  - *Output sanitization* (primary): Replace `<` `>` `"` with `&lt;` `&gt;` `&quot;`
+  - *Input validation*: Reject/filter JS in input (but not always possible)
+  - *HttpOnly cookie flag*: Blocks `document.cookie` access (XSS can still send requests - browser auto-attaches cookies)
+  - *Browser XSS Auditor*: Detects if response contains same JS as request (Chrome, Edge, Safari - NOT Firefox)
+  - *CSP (Content Security Policy)*: Specify allowed sources for scripts
+    - `Content-Security-Policy: default-src 'self'; script-src scripts.example.com`
+    - Embedded JS not executed → must load from external files → attacker can't inject inline scripts
+
+  #subinline("DOM-based XSS")
+  - Server NOT involved → client JS reads untrusted data (URL, DOM) and processes insecurely
+  - *`#` fragment*: Attacker puts JS after `#` in URL → not sent to server (server can't detect) → but client JS reads it via DOM
+  - *Dangerous functions*: `unescape()` (decodes URL-encoded chars), `eval()` (executes string as JS)
+  - Example: `?data=19#data=19;alert('XSS')` → `eval("13 * 19;alert('XSS')")`
+  - *Counter*: Avoid `eval()`, validate/sanitize in client-side JS
+
+  #inline("Broken Access Control")
+  Access data or execute actions for which attacker isn't authorised
+  #subinline("Function Level")
+  Access unauthorised function. E.g.: `/admin/post` endpoint does not check if user is actually admin
+  #subinline("Object Level")
+  Use authorised function to access unauthorised objects (resources) \
+  E.g.: Predictable resource IDs (username, filename, sequential ID...) \
+  *Counter*: Auth checks for every action and resource access, use random/unpredictable resource IDs
+
+  #inline("Cross-Site Request Forgery (CSRF)")
+  Force authenticated user to execute unwanted action
+  - *GET*: `<img src="https://shop.com/transfer?amount=1000&to=attacker">` → browser auto-attaches shop.com cookie
+  - *POST*: Hidden iframe with auto-submitting form, or fetch with `credentials: "include"`
+  - Works because GET/POST requests are not subject to Same Origin Policy
+  - *Counter*:
+    - CSRF token: Store in session storage, include in request body, server compares
+    - `Set-Cookie: SameSite=Strict|Lax|None` - Strict: never attach to cross-site requests, Lax: only GET (ensure GETs don't modify state)
+
+  #inline("Testing Tools")
+  - *ZAP*: Automated scanner, tries known vulnerabilities (may use fixed values that break app)
+  - *Fortify*: Static code analyzer (doesn't catch runtime issues like SQLi/XSS)
+  - *SpotBugs*: Binary (JAR) analyzer
 ])
 
 = Buffer overflow & race cond (SDL 3 & 4)
