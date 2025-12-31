@@ -238,27 +238,39 @@
   - *Counter*: Avoid `eval()`, validate/sanitize in client-side JS
 
   #inline("Broken Access Control")
-  Access data or execute actions for which attacker isn't authorised
   #subinline("Function Level")
-  Access unauthorised function. E.g.: `/admin/post` endpoint does not check if user is actually admin
-  #subinline("Object Level")
-  Use authorised function to access unauthorised objects (resources) \
-  E.g.: Predictable resource IDs (username, filename, sequential ID...) \
-  *Counter*: Auth checks for every action and resource access, use random/unpredictable resource IDs
+  User accesses function they shouldn't (e.g., `/admin/vieworders`)
+  - *Finding URLs*: Guess patterns (`/customer` → `/admin`), access logs, open-source code
+  - *Counter*: Check user role/permissions before granting URL access (usually framework-configurable)
 
-  #inline("Cross-Site Request Forgery (CSRF)")
-  Force authenticated user to execute unwanted action
-  - *GET*: `<img src="https://shop.com/transfer?amount=1000&to=attacker">` → browser auto-attaches shop.com cookie
-  - *POST*: Hidden iframe with auto-submitting form, or fetch with `credentials: "include"`
-  - Works because GET/POST requests are not subject to Same Origin Policy
+  #subinline("Object Level")
+  User abuses function to access *objects* they shouldn't (e.g., `?pid=1` → `?pid=2`)
+  - *Exposed identifiers*: file name, user ID, product ID, database key
+  - More common (framework handles URL access, but object checks must be coded manually)
+  - *Counter*: Verify user owns object on every request; derive IDs from session instead of exposing in params
+
+  #inline("CSRF (Cross-Site Request Forgery)")
+  Force authenticated user to execute unwanted action. Browser attaches cookies regardless of link source.
+  - *GET*: `<img src="https://shop.com/transfer?to=attacker" width="1" height="1">`
+  - *POST*: Hidden form + `document.forms[0].submit()` in zero-size iframe, or `fetch()` with `credentials: "include"`
+  - *Multi-step*: `fetch()` + `async/await` chains requests
   - *Counter*:
-    - CSRF token: Store in session storage, include in request body, server compares
-    - `Set-Cookie: SameSite=Strict|Lax|None` - Strict: never attach to cross-site requests, Lax: only GET (ensure GETs don't modify state)
+    - CSRF token: Random per-user token in session, include in requests, server compares
+    - SameSite cookie: `None` (all) | `Lax` (GET only, default) | `Strict` (never) — still use CSRF tokens!
 
   #inline("Testing Tools")
-  - *ZAP*: Automated scanner, tries known vulnerabilities (may use fixed values that break app)
-  - *Fortify*: Static code analyzer (doesn't catch runtime issues like SQLi/XSS)
-  - *SpotBugs*: Binary (JAR) analyzer
+  #subinline("Dynamic (Vulnerability Scanners)")
+  Crawls running app → sends attack patterns → analyzes response
+  - *ZAP*: Detects SQLi, XSS, missing CSRF tokens, cookie attributes
+  - *Limit*: Only tests what crawler finds; struggles with forms; auth/state issues
+
+  #subinline("Static (Code Analyzers)")
+  Analyzes source code or bytecode without running app
+  - *Fortify*: Source code - detects CSRF, info leaks, hardcoded passwords
+  - *SpotBugs*: JAR bytecode (Java only)
+  - *Limit*: Must understand framework (may miss SQLi/XSS)
+
+  Both miss logic vulnerabilities (access control, param tampering) → manual testing required
 ])
 
 = Buffer overflow & race cond (SDL 3 & 4)
