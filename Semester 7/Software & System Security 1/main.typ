@@ -27,6 +27,7 @@
   - *Confidentiality*: Protect sensitive data from unauthorised read access
   - *Integrity*: Protect data and systems from unauthorised modification
   - *Availability*: Information must be available when needed
+
   #inline("Terminology")
   - *Vulnerability*: Defect (bug/flaw) that attacker can exploit
   - *Threat*: Possible danger exploiting a vulnerability. Intentional (attacker) or accidental (fire)
@@ -36,10 +37,12 @@
   - *Risk*: Criticality of threat/vulnerability. _risk = probability x impact_
   - *Countermeasure*: Action/device/process reducing risk (removes vulnerability or reduces harm)
   - *CVE*: Common Vulnerabilities and Exposures, standard naming for public vulnerabilities (e.g., CVE-2018-0297)
+
   #inline("Defect Types")
   - *Security Bug*: Implementation error (e.g., `gets()` no bounds check). Found by code inspection.
   - *Security Design Flaw*: Design error (e.g., weak PRNG seed). Found by threat modelling.
   - ~50/50 split → design matters as much as code!
+
   #inline("Malware Types")
   - *Malware*: Malicious software to disrupt, gather info, or gain access
   - *Virus*: Spreads via host programs/documents, requires user interaction
@@ -47,10 +50,12 @@
   - *Trojan*: Disguises as legitimate software, does not self-replicate
   - *Ransomware*: Encrypts data, demands payment for decryption key
   - *Drive-by download*: Browser/plugin vulnerability → auto-execute malicious code from compromised site
+
   #inline("Reactive Countermeasures")
   - *Penetrate & Patch*: Fix when discovered. _Problems: exploit often before patch, users don't patch, rushed patches add vulnerabilities_
   - *Network Security Devices*: WAF (Web App Firewall), IPS (Intrusion Prevention System) filter traffic before reaching app. _Problems: can't detect all attacks, expensive config_
   - Both are signs of *poor software security practice*!
+
   #inline("Proactive Countermeasures")
   - *Secure Development Lifecycle (SDL)*: Security activities throughout development - only approach that works
   - Must think like an attacker to design countermeasures
@@ -63,6 +68,7 @@
   - Applies to *any* dev process (waterfall, iterative, agile) → adopt incrementally
   - Early activities *prevent* defects, late activities *detect* them
   - Fix early = 10-100x cheaper than fixing late
+
   #inline("Security Activities")
   #image("assets/secure-development-lifecycle-security-activities.png", width: 72%)
   1. *Security requirements*: From functional requirements, technology-agnostic (e.g., credit card transmission → require encrypted channel)
@@ -72,8 +78,9 @@
   5. *Code review*: Automated tools + manual inspection
   6. *Penetration testing*: Attack own system to verify requirements fulfilled + find bugs. Human testers more effective than automated tools
   7. *Security operations*: Patching, monitoring, backups, learn from attacks
+
   #inline("Security Risk Analysis (horizontal activity)")
-  Runs throughout all phases. Rate risk of found problems: _risk = probability × impact_ → decide: accept or mitigate
+  Runs throughout all phases. Rate risk of found problems: _risk = probability x impact_ → decide: accept or mitigate
 ])
 
 = 7 (+1) Kingdoms of Software Security Errors (SDL 3 & 4)
@@ -119,66 +126,56 @@
   - *Framework issues*: Weak session ID length/randomness
 ])
 
-= Web app attacks (SDL 5 & 6)
+= Web Application Security Testing (SDL 5 & 6)
 #concept-block(body: [
-  Many web apps, security low and critical data (banking, e-commerce...)
-  OWASP: Top Ten, Testing Guide, App Secu Verif Standard, WebGoat (bad app example)
-  // #image("webappsbasic.png")
-  #inline("Injection attacks")
-  #subinline("SQL")
-  - Tools: ```sql OR ``==`` ```, ```sql UNION interesting_cols FROM interesting_table```, ```sql ; UPDATE employee SET password = 'foo'-```
-  - If multiple params: use ```sql -- ``` to make rest of query a comment. In MySQL the space at the end is required.
-  - Use ```sql ;``` to execute separate queries, only if server uses `executeBatch()`
-  - Insert user: ```sql userpass'), ('admin', 'Superuser', 'adminpass')--```
-  - *Testing*:
-    - Set password to single-quote ' and see if DB returns error. Inject `SLEEP`
-    - *Getting table names*: ```sql SELECT * FROM user_data WHERE last_name = Smith' UNION SELECT 1,TABLE_NAME,3,4,5,6,7 FROM INFORMATION_SCHEMA.SYSTEM_TABLES--```
-      1. We assume `user_data` has 7 columns, all `int` except the 2nd one which is `string`
-      2. We set the `UNION` query so that all columns but the 2nd are string literals (arbitrary numbers)
-      3. We set the 2nd column to `TABLE_NAME` and query the `INFORMATION_SCHEMA.SYSTEM_COLUMNS`
-      4. Second column contains one table name per row
-    - *Getting column names of a table*: ```sql SELECT * FROM user_data WHERE last_name = Smith' UNION SELECT 1,COLUMN_NAME,3,4,5,6,7 FROM INFORMATION_SCHEMA.SYSTEM_COLUMNS WHERE TABLE_NAME = 'EMPLOYEE'--```
-      3. We set the 2nd column to `COLUMN_NAME` and query the `INFORMATION_SCHEMA.SYSTEM_COLUMNS` for table `EMPLOYEES`
-      4. Second column contains one column name per row
-  - *sqlmap (Automation)*:
-    - *Check for vuln*: ```sh sqlmap -r request.txt -p account_name```
-      - `-r request.txt`: HTTP request recorded in file
-      - `-p account_name`: Specify target parameter
-    - *List schemas/databases*: ```sh sqlmap -r request.txt --dbs```
-    - *List tables*: ```sh sqlmap -r request.txt -D PUBLIC --tables```
-      - `-D PUBLIC`: Specify the schema/database
-    - *Dump table content*: ```sh sqlmap -r request.txt -D PUBLIC -T EMPLOYEE --dump```
-      - `-T EMPLOYEE`: Specify the table
-  - *Countermeasures:* Prepared statements, all inputs are pre-compiled and special chars are escaped (```java $sth = prepare("SELECT id FROM users WHERE name=? AND pass=?"); execute($sth, $name, $pass);``` yields ```sql SELECT id FROM users WHERE name='\' OR \'\'=\'' AND pass='\' OR \'\'=\'';```)
-  #subinline("OS Cmd")
-  - Java `Runtime.exec()` instead of `FileReader`/`FileInputStream`, PHP `system()`
-  - *Test*: Analyse REST request, e.g. `HelpFile` field. Append `"` after filename and check for err. Append `; ipconfig`/` & ipconfig` (nix/msft). Might need to prepend `"` if app uses file path.
-  - *Counter*:
-    - use IO classes instead of OS runtime
-    - use character whitelisting (ban quotes...)
-    - run process with minimal privieges
-  #subinline("JSON/XML")
-  - *JSON*: app inserts data inside of JSON -> you can overwrite previous keys, since the last occurrence matters. Insert: `myPassword","admin":"true`
-  - Same principle for *XML*
-  - *Counter:* blacklist curly brackets, special chars
-  \
-  \
-  #subinline("XML External Entitiy Injection")
-  Attacker makes a manual POST request with a special XML body:
-  ```xml
-  <?xml version="1.0"?>
-  <!DOCTYPE query [
-    <!ENTITY attack SYSTEM "file:///etc/passwd">
-  ]>
-  <comment>
-    <text>&attack;</text>
-  </comment>
-  ```
-  The app will display the password file content instead as the comment text.
-  - *Counter:* blacklist < and >, disabled ext. entities in XML parser
+  #inline("Injection Attacks")
+  *Core idea*: User input treated as code, not data
 
-  #inline("Auth & session")
-  #subinline("Broken auth")
+  #subinline("SQL Injection")
+  - *Testing*: Insert `'` → SQL error (HTTP 500, different response) = vulnerable
+  - *Blind SQLi* (no visible errors):
+    - *Time-based*: ```sql SLEEP(5)``` causes delay if vulnerable
+    - *Boolean-based*: Different response for true/false conditions (e.g., ```sql ' AND 1=1--``` vs ```sql ' AND 1=2--```)
+  - *Tautology (always-true)*: ```sql ' OR ''='``` makes WHERE always TRUE:
+    - ```sql WHERE (userid=? AND password='') OR ''=''``` → first part fails, but ```sql ''=''``` is TRUE
+  - *UNION attack*:
+    1. *Find column count*: Try ```sql ' UNION SELECT 1--```, ```sql ' UNION SELECT 1,2--```, etc. until no error. Use Burp Intruder (Sniper) to automate.
+    2. *Extract data*: ```sql ' UNION SELECT col1,col2,... FROM table--``` (columns must match count AND types)
+  - *Schema discovery*:
+    - Tables: ```sql UNION SELECT 1,TABLE_NAME,3,... FROM INFORMATION_SCHEMA.SYSTEM_TABLES--```
+    - Columns: ```sql UNION SELECT 1,COLUMN_NAME,3,... FROM INFORMATION_SCHEMA.SYSTEM_COLUMNS WHERE TABLE_NAME='target'--```
+  - *Comments*: Cut off rest of query (e.g., ```sql admin'--``` ignores ```sql AND pass='...'```)
+    - MySQL: ```sql --``` + space after, or ```sql #```
+    - Others: ```sql --```
+  - *Multiple queries*: `;` separator only works if server uses `executeBatch()`
+  - *INSERT injection*: ```sql userpass'), ('admin', 'Superuser', 'adminpass')--```
+  - *Counter*:
+    - *Prepared statements*: Query parsed with `?` placeholders, input bound separately → always data, never code
+    - *Escaping* (weaker): Transform `'` → `\'`, error-prone (encoding issues, incomplete escaping)
+  #subinline("OS Command Injection")
+  - *Cause*: App executes OS commands with user input (Java `Runtime.exec()`, PHP `system()`)
+  - *Testing*: Find input used in commands (e.g., filename field), append command separator:
+    - Linux: ```sh ; whoami``` or ```sh | whoami```
+    - Windows: ```sh & ipconfig```
+    - If quoted path: close quote first ```sh "; whoami```
+  - *Counter*: Use IO classes instead of OS runtime, whitelist allowed chars, minimal privileges
+  #subinline("JSON/XML Injection")
+  - *Cause*: App builds JSON/XML by inserting user input into template
+  - *Attack*: Inject closing chars + new key/element → last occurrence wins
+    - JSON: `myPassword","admin":"true` | XML: `</password><admin>1</admin>`
+  - *Counter*: Escape/blacklist special chars (`"`, `{`, `}`, `<`, `>`)
+  #subinline("XXE (XML External Entity)")
+  - *Cause*: XML parser processes external entity references in DOCTYPE
+  - *Attack*: Send crafted XML via POST with entity pointing to resource:
+    ```xml
+    <!DOCTYPE foo [<!ENTITY x SYSTEM "file:///etc/passwd">]>
+    <data>&x;</data>
+    ```
+  - *Result*: App returns file content. Also usable for SSRF (Server-Side Request Forgery → internal network requests)
+  - *Counter*: Disable external entities in parser, prefer JSON over XML
+
+  #inline("Authentication & Session")
+  #subinline("Broken Authentication")
   - Attacker gets credentials (weak pw, reset pw)
   - Prerequ: unlimited login attempts allowed
   - *Brute-force*: try common usernames and pws, email enumeration (time or msg), create account and see if email taken. *Remove cookie headers for new session* \
@@ -189,13 +186,13 @@
     3. Calls again, then adds 2nd email
     4. Uses 2nd email to pw reset, sets own pw \
     *Counter:* no reset pw feat and force phone call, use hard security questions, issue temp new pw, issue unique pw reset lin
-  #subinline("Broken session mngmt")
+  #subinline("Broken Session Management")
   - Attacker gets session ID (guess, exposed, timeout issue, bad rotation, fixation...)
   - Session ID: random, used to ID user, generated when logged in
   - *Session fixation*: Attacker tricks the user into using the web app with their (attack) session ID, e.g. by sending a URL with the session ID. Then attacker waits for user to log in, add credit card... \
     *Counter:* long random 128bit UIDs, change ID for each login, use cookies not URL, use session timeouts (10min)
 
-    #inline("XSS (cross-site scripting)")
+    #inline("XSS (Cross-Site Scripting)")
     Inject own JS code that is executed in other user's browser, without having to modify server code
     #subinline("Stored (persist)")
     Attacker places attack script directly as normal data in the web app (e.g. as a post comment). When user views it, browser executes the `script` tag.
