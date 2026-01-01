@@ -371,60 +371,58 @@
   3. Thread A calls `get`. But it will get User B's session ID.
 ])
 
-= Fundamental Security Principles (SDL 1, 2, 3)
+= Fundamental Security Principles (SDL 1, 2 & 3)
 #concept-block(body: [
-  Battle-tested, true back then, now and in the future. Tech-independent.
+  #inline("1. Secure the Weakest Link")
+  Overall security determined by weakest component (SW, HW, protocols, but also users, admins, processes). \
+  Attackers target weakest link → fix highest risks first (not easiest). Identify via: threat modelling, pentests, risk analysis.
 
-  #inline("1. Secure the weakest link")
-  Attackers target the weakest component. Fix high risk vulnes first. To identify:  threat modelling, penetration tests, and risk analysis
-  #inline("2. Defense in depth")
-  1. Defend multiple layers, not just the outter one (e.g. don't assume servers can communicate unencrypted bc you have setup a firewall and inner network is safe)
-  2. Don't rely only on prevention.
-    1. Prevent (_long, safe pw requs_)
-    2. Detect (_monitor large num of failed login_)
-    3. Contain (_lock hacked accounts_)
-    4. Recover (_ask users to reset pws, monitor attack IPs_)
-  #inline("3. Fail securely")
-  - *Version Downgrading Attack*: man in the middle convinces client and server that t.he other only supports old (vulnerable) protocol version. Server is configed to accept this.
-  - *Fail open vulne*: `isAdmin` initialised to `true`. Function that sets it to the actual value throws an error. Error is caught and `if` check is executed. `isAdmin` is still `true` so sensitive code runs.
-    ```java
-    boolean isAdmin = true;
-    try {
-      isAdmin = checkPermissions();
-    } catch (Exception ex) {
-      log.write(ex.toString());
-    }
-    if(isAdmin) {
-      // sensitive
-    }
-    ```
+  #inline("2. Defense in Depth")
+  Multiple diverse defensive strategies. If one layer fails, another may prevent attack.
+  - Don't assume internal network is safe just because firewall exists → encrypt internal traffic too, harden hidden servers
+  - Beyond prevention: *Prevent* (password requirements) → *Detect* (monitor failed logins) → *Contain* (lock accounts) → *Recover* (force password reset)
+
+  #inline("3. Fail Securely")
+  Failure must not compromise security. Caused by: *poor code*, *poor procedures*, *poor configuration*.
+  - *Poor code*: `isAdmin = true; try { isAdmin = checkPerms(); } catch {...}` → exception leaves `isAdmin = true`
+  - *Poor procedures*: Spare firewall configured to "let through everything" for quick replacement
+  - *Poor config*: System accepts old insecure protocol versions → *Version Downgrading Attack* (MITM forces old protocol: NTLM→LM, TLS 1.2→SSL 3.0, 5G/4G/3G→GSM)
+
   #inline("4. Principle of Least Privilege")
-  Keep separate apps for users with separate needs (admin dashboard)
+  User/program gets least amount of privileges necessary. Often violated because it "makes things easier".
+  - Don't run programs with full access rights → exploiting them gives attacker full access
+  - Split functionality across apps (admin dashboard internal-only vs customer app public)
+  - DB user with full rights + SQLi → attacker accesses all tables
+
   #inline("5. Separation of Privileges")
-  - Preventing that a single user can carry out and conceal an action (or an attack) completely on his own \
-  - Separating the entity that approves an action, the entity that carries out an action, and the entity that monitors an action
-  - E.g. _Different people are responsible for development vs testing+approval of deployment_
+  No single user can carry out AND conceal an action (four-eyes principle). \
+  Separate: approval ↔ execution ↔ monitoring.
+  - E-banking: transfers >10k need manager approval
+  - Dev ≠ tester ≠ deployer (prevents malicious dev from including backdoors)
+  - DB admin ≠ system admin (can't alter own logs)
+
   #inline("6. Secure by Default")
-  Default config must be secure. \
-  Enforce 2FA, auto security updates, firewall on by default, minimal default permissions, no default pw (or force to change it)
-  #inline("7. Minimise attack surface")
-  Include only necessary features, use packet-filtering firewalls to keep internal services hidden from Internet
-  #inline("8. Keep it simple")
-  Easier to maintain. Users shouldn't have to make important security decisions.
-  - Re-use proven software components
-  - Implement security-critical functions only once and place them in easily identifiable program components (e.g., in a separate security package)
-  - Do not allow the users to turn off important security features
-  #inline("Avoid Security by Obscurity")
-  Security by Obscurity = system is secure bc attackers don't know how its internals work. \
-  Good only as redundancy on top of other security measures. \
-  Reverse eng: disassembler, decompilers.
-  - *Source/Binary*: Transforms code into a functionally equivalent, unreadable version to protect IP during public delivery.
-  - *Data*: Obscures storage/structures (e.g., splitting variables, changing encoding, promoting scalars to objects).
-  - *Control Flow*: Reorders logic and injects false conditionals/junk code to break decompiler flow while preserving output.
-  - *Preventive*: Targets RE tools by stripping metadata and renaming identifiers to gibberish (e.g., `calculate()` -> `x()`).
-  #inline("Don't Trust User Input and Services")
-  Always validate the received data. Use defensive prog. \
-  Prefer *whitelisting* over *blacklisting* (i.e. define what is allowed, not what is forbidden). Don't try fixing invalid data, just reject it.
+  Default config must be secure: 2FA on, auto-updates on, firewall on, minimal default permissions, no default passwords.
+
+  #inline("7. Minimize Attack Surface")
+  Attack surface = all points where attacker can attack (open ports, APIs, forms, any reachable code). \
+  Fewer features → less code → smaller attack surface. Disable unused features, use firewalls to hide internal services.
+
+  #inline("8. Keep it Simple")
+  Simple to develop/maintain/test securely. Simple for users to use securely.
+  - Re-use proven components (don't invent own crypto)
+  - Security-critical functions in one place (single `checkAccess()`)
+  - Users shouldn't make security decisions → don't let them disable security features
+
+  #inline("9. Avoid Security by Obscurity")
+  Security by obscurity = secure because attackers don't know internals. Nearly always fails (reverse engineering: disassemblers, decompilers). \
+  Only good as *redundancy* on top of real security measures.
+  - *Code obfuscation types*: Source/Binary (unreadable equivalent), Data (split vars, change encoding), Control Flow (reorder logic, inject junk), Preventive (strip metadata, rename `calculate()`→`x()`)
+
+  #inline("10. Don't Trust User Input and Services")
+  User may be attacker, 3rd party service may be compromised. Always validate received data.
+  - *Whitelisting* > blacklisting: define what is allowed (blacklisting easy to forget something)
+  - Don't try fixing invalid data → just reject it
 ])
 
 = Secure SSR webapps (SDL 3 & 4)
