@@ -312,16 +312,16 @@
   }
   ```
 
-  #grid(
-    columns: (28%, auto),
-    // image("buffoexploit.png"),
-    [
-      - Attacker sends more than `256 bytes` through socket.
-      - Bytes `265` to `272` overwrite `ret address`. Attacker can replace it with the beginning addr. of buffer.
-      - Bytes `0` to `264` contain attack code.
-      - Attack code runs with same privileges as program.
-    ],
-  )
+  // #grid(
+  //   columns: (28%, auto),
+  //   // image("buffoexploit.png"),
+  //   [
+  //     - Attacker sends more than `256 bytes` through socket.
+  //     - Bytes `265` to `272` overwrite `ret address`. Attacker can replace it with the beginning addr. of buffer.
+  //     - Bytes `0` to `264` contain attack code.
+  //     - Attack code runs with same privileges as program.
+  //   ],
+  // )
 
   - *Counters:* Check boundaries for any input/output op, avoid `gets`, `strcpy`, static code ana & fuzzing, forbid exec of code in mem data segments,  Address Space Layout Randomisation (ASLR),
 
@@ -423,6 +423,112 @@
   User may be attacker, 3rd party service may be compromised. Always validate received data.
   - *Whitelisting* > blacklisting: define what is allowed (blacklisting easy to forget something)
   - Don't try fixing invalid data → just reject it
+])
+
+= Java Security (SDL 4)
+
+#concept-block(body: [
+  #inline("JCA (Java Cryptography Architecture)")
+  Provider-based architecture: CSPs (Cryptographic Service Providers) implement algorithms. \
+  Default providers included, 3rd party (e.g., Bouncy Castle) addable. Specify: `getInstance("SHA-256", "BC")`
+
+  #subinline("Hashing (MessageDigest)")
+  ```java
+  MessageDigest md = MessageDigest.getInstance("SHA-256");
+  md.update(data); // feed data (can call multiple times)
+  byte[] hash = md.digest(); // compute hash
+  // or: byte[] hash = md.digest(data); // feed + compute
+  ```
+  *Secure:* SHA-256, SHA-512, SHA3-256, SHA3-512. *Insecure:* MD5, SHA-1 (only backwards compat!)
+
+  #subinline("Random Numbers")
+  `java.util.Random` is *NOT* cryptographically secure → use `SecureRandom`!
+  ```java
+  SecureRandom random = new SecureRandom(); // uses OS entropy (/dev/urandom)
+  byte[] bytes = new byte[16];
+  random.nextBytes(bytes);
+  ```
+  `setSeed()` *supplements* randomness (never reduces it). Default seeding usually sufficient.
+
+  #subinline("Secret Key Generation")
+  ```java
+  KeyGenerator keyGen = KeyGenerator.getInstance("AES");
+  keyGen.init(256); // key size: 128, 192, or 256
+  SecretKey key = keyGen.generateKey();
+  // From existing raw bytes:
+  SecretKeySpec keySpec = new SecretKeySpec(rawBytes, "AES");
+  ```
+  Password-based keys are *weak* → use long random data or proper key derivation (PBKDF2).
+
+  #subinline("Symmetric Encryption (Cipher)")
+  `Cipher.getInstance("algo/mode/padding")` — *"AES" alone defaults to AES/ECB/PKCS5Padding!*
+  - *ECB*: Never use! Identical blocks → identical ciphertext (leaks patterns)
+  - *CBC*: + MAC (Message Authentication Code) for integrity
+  - *GCM*: Authenticated (confidentiality + integrity built-in)
+  - *CTR*: Stream mode
+  CBC/GCM/CTR need *IV* (Initialization Vector): random, *never reuse with same key!*
+  ```java
+  // CBC: needs separate MAC for integrity
+  cipher.init(mode, key, new IvParameterSpec(iv));
+  // GCM: authenticated, 128 = tag bits
+  cipher.init(mode, key, new GCMParameterSpec(128, iv));
+  ```
+  `update()` for chunks, `doFinal()` for final block + padding. \
+  *doFinal resets cipher* → must call `init()` with new IV before reusing!
+
+  #subinline("Public Key Cryptography")
+  - *Key pair:* `KeyPairGenerator.getInstance("RSA")` → `initialize(2048)` → `generateKeyPair()`
+  - *RSA encryption:* `Cipher.getInstance("RSA/ECB/OAEPPadding")`, encrypt with `pubKey`, decrypt with `privKey`
+    - "ECB" here is just Java naming — RSA encrypts entire message as one block (no chaining like AES ECB)
+    - Limited to key size (2048-bit → max 256 bytes) → use *hybrid encryption* for large data
+  - *Hybrid encryption:* RSA too slow/limited for large data → combine RSA + AES:
+    - Generate random AES session key, encrypt data with AES (fast, unlimited size)
+    - Encrypt AES key with RSA (small, fits in 256 bytes) → send both
+    - `WRAP_MODE` = encrypt a key, `UNWRAP_MODE` = decrypt a key
+    ```java
+    // Sender: encrypt AES key with recipient's public key
+    cipher.init(Cipher.WRAP_MODE, recipientPubKey);
+    byte[] wrappedKey = cipher.wrap(aesSessionKey);
+    // Recipient: decrypt AES key with own private key
+    cipher.init(Cipher.UNWRAP_MODE, myPrivKey);
+    Key aesKey = cipher.unwrap(wrappedKey, "AES", Cipher.SECRET_KEY);
+    ```
+  - *Digital signatures:* `Signature.getInstance("SHA256withRSA")`
+    - Sign: `initSign(privKey)` → `update(data)` → `sign()`
+    - Verify: `initVerify(pubKey)` → `update(data)` → `verify(signature)`
+
+  #inline("JSSE (Java Secure Sockets Extension)")
+  TLS sockets for secure communication. TLS 1.2/1.3 enabled by default (1.0/1.1 disabled, SSL not supported).
+  ```java
+  SSLSocketFactory sf = (SSLSocketFactory) SSLSocketFactory.getDefault();
+  SSLSocket socket = (SSLSocket) sf.createSocket("host", 443);
+  // Server: SSLServerSocketFactory → SSLServerSocket → accept()
+  ```
+
+  #subinline("Keystore vs Truststore")
+  - *Keystore*: Own private key + certificate → used to authenticate *yourself* to others
+  - *Truststore*: Trusted CA certificates (no private keys) → used to verify *peer's* certificate
+  - *Server* needs keystore (prove identity to clients), *client* needs truststore (verify server)
+  - *Mutual TLS*: Both sides need keystore AND truststore (`setNeedClientAuth(true)`)
+  - Default truststore `$JAVA_HOME/lib/security/cacerts` contains official CA certs → public HTTPS works out of box
+
+  #subinline("keytool (CLI for keystores)")
+  - *Generate keypair:* `keytool -genkeypair -keyalg rsa -keysize 2048 -keystore ks.p12 -storetype PKCS12 -alias mykey`
+  - *Export cert:* `keytool -exportcert -keystore ks.p12 -alias mykey -file cert.cer`
+  - *Import cert to truststore:* `keytool -importcert -keystore ts.p12 -file cert.cer -alias peer`
+  - *Run with stores:* `java -Djavax.net.ssl.keyStore=ks.p12 -Djavax.net.ssl.keyStorePassword=pw ...`
+
+  #subinline("SSLContext (Programmatic Config)")
+  Alternative to `-D` flags: configure TLS in code (for fine-grained control, mutual TLS, etc.). \
+  Build from: *KeyManagerFactory* (own keys) + *TrustManagerFactory* (trusted certs)
+  ```java
+  KeyManagerFactory kmf = KeyManagerFactory.getInstance("PKIX");
+  kmf.init(keyStore, password);  // load own private key
+  TrustManagerFactory tmf = TrustManagerFactory.getInstance("PKIX");
+  tmf.init(trustStore);          // load trusted certs
+  SSLContext ctx = SSLContext.getInstance("TLSv1.3");
+  ctx.init(kmf.getKeyManagers(), tmf.getTrustManagers(), null);
+  ```
 ])
 
 = Developing Secure SSR Web Applications (SDL 3 & 4)
