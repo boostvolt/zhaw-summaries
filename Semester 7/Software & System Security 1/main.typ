@@ -425,144 +425,167 @@
   - Don't try fixing invalid data → just reject it
 ])
 
-= Secure SSR webapps (SDL 3 & 4)
+= Developing Secure SSR Web Applications (SDL 3 & 4)
 
 #concept-block(body: [
-  Little client code, server returns full HTML pages. \
-  *Warning:* in Spring Security, rules cascade in reverse CSS order: higher rule has priority
-  // #image("market.png")
-  #inline("DB permissions")
-  // #image("dbperms.png")
-  #inline("Spring config")
-  `@EnableWebSecurity`: marks class as Spring Security config
+  #inline("Spring Security Config")
+  `SecurityConfig` class: central place for auth, access control, CSRF, session settings. \
+  `@EnableWebSecurity` marks config class. `SecurityFilterChain` bean defines rules. \
+  *Order matters:* Rules applied top→bottom, *first match wins* → put specific rules before general!
   ```java
-  @Bean
-  public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-    http
-    .authorizeHttpRequests(auth -> auth.anyRequest().permitAll())
-    .requiresChannel(channel -> channel.anyRequest().requiresSecure())
-    .csrf(csrf-> csrf.disable());
-    return http.build();
+  http.authorizeHttpRequests(auth -> auth
+    .dispatcherTypeMatchers(FORWARD, ERROR).permitAll() // internal forwards/errors
+    .requestMatchers("/", "/public/**", "/css/*").permitAll()
+    .requestMatchers("/admin/**").hasAnyRole("MARKETING", "SALES")
+    .anyRequest().denyAll() // secure default!
+  ).requiresChannel(c -> c.anyRequest().requiresSecure()); // HTTP→HTTPS
+  ```
+
+  #inline("Preventing Information Leakage")
+  Unhandled exceptions leak internals (stack traces, SQL). *Fix:* Standard error pages.
+  - Add `error.html` in `/templates/` → generic message for all errors
+  - Specific: `404.html`, `500.html` in `/templates/error/`
+  - *Remove* debug settings from `application.properties` (include-exception, include-stacktrace)
+
+  #inline("XSS Prevention (Data Sanitation)")
+  *Always sanitize* regardless of input validation. Thymeleaf: `th:text` = safe (encodes `<`), `th:utext` = *unsafe*. \
+  Sanitize ALL external data: user input, DB, files, 3rd party systems.
+
+  #inline("SQL Injection Prevention")
+  *Never* string concatenation. Use *prepared statements* with `?` placeholders.
+  ```java
+  String sql = "SELECT * FROM Product WHERE desc LIKE ?";
+  jdbcTemplate.query(sql, mapper, "%" + desc + "%"); // safe - '?' escaped
+  ```
+
+  #inline("JPA (Jakarta Persistence API)")
+  ORM framework: maps objects ↔ database tables. *Prevents SQLi* when used correctly.
+  - *Entity classes:* `@Entity`, `@Table(name="Product")`, `@Id` for primary key
+  - *JPQL:* Query language for entities. Use *named parameters* (`:param`) not string concat!
+    ```java
+    @Query("SELECT p FROM Product p WHERE p.desc LIKE CONCAT('%', :desc, '%')")
+    List<Product> findByDesc(@Param("desc") String desc); // safe
+    ```
+  - *CrudRepository:* Auto-generates safe queries: `findById()`, `save()`, `delete()`, `findByDescriptionContaining(String)` = auto LIKE
+  - *Danger:* `EntityManager` + string concatenation or native queries = *SQLi possible!*
+
+  #inline("Secure Password Storage")
+  *Never* plaintext or simple hash → use *slow hash functions* (bcrypt, Argon2, PBKDF2, scrypt).
+  - Plaintext/simple hash → SQLi/DB compromise = direct access or dictionary attack
+  - Salt + fast hash → still crackable (100M/sec on GPU)
+  - *bcrypt*: salt + many rounds, designed to resist GPU attacks
+
+  #inline("Authentication Setup (Spring)")
+  DB-based auth requires: `UserDetailsService` (loads user from DB) + `BCryptPasswordEncoder` (verifies password).
+  ```java
+  @Service class UserService implements UserDetailsService {
+    public UserDetails loadUserByUsername(String u) { /*load from DB*/ }
+  }
+  // SecurityConfig beans:
+  @Bean AuthenticationManager authManager() {
+    var p = new DaoAuthenticationProvider();
+    p.setUserDetailsService(userService); p.setPasswordEncoder(pwEncoder());
+    return new ProviderManager(p);
+  }
+  @Bean PasswordEncoder pwEncoder() { return new BCryptPasswordEncoder(); }
+  ```
+
+  #inline("Authentication Mechanisms")
+  #subinline("HTTP BASIC")
+  Server returns 401 → browser shows dialog → credentials in `Authorization: Basic <base64>` header on *every* request. \
+  *Limitation:* No logout without closing browser (credentials cached).
+
+  #subinline("FORM-based (Preferred)")
+  Login form submits to server → on success, stores user/role in session → session ID in cookie. \
+  *Always POST* (GET exposes password in URL/logs). Logout via POST to `/logout` destroys session.
+  ```java
+  http.formLogin(f -> f.loginPage("/public/login").failureUrl("/public/login?error=true").permitAll())
+      .logout(l -> l.logoutSuccessUrl("/public/products?logout=true"));
+  ```
+  *Login form requirements:* action=`/public/login`, params: `username`, `password`.
+
+  #inline("Role-Based Access Control")
+  Define roles → assign to users → map roles to resources in `SecurityConfig`.
+  ```java
+  .requestMatchers("/admin/deletepurchase/*").hasRole("SALES") // more specific first!
+  .requestMatchers("/admin/**").hasAnyRole("MARKETING", "SALES")
+  ```
+  *URL patterns:* `/admin/*` = direct children only, `/admin/**` = all descendants.
+
+  #subinline("Method-Level Security")
+  Alternative to SecurityConfig rules: `@EnableMethodSecurity` in config class, then:
+  ```java
+  @PreAuthorize("hasRole('SALES')") // or combine with method params:
+  @PreAuthorize("hasRole('USER') and #userId == authentication.principal.id")
+  public void updateUser(int userId) { ... }
+  ```
+  *Advantages:* Fine-grained control, works for internal calls (not just HTTP). Can combine both for *defense in depth*.
+
+  *UI hiding not enough!* `sec:authorize="hasRole('SALES')"` hides buttons in Thymeleaf, but user can still craft requests → *always enforce server-side*.
+
+  #inline("CSRF Protection")
+  Spring Security default: CSRF token stored in session, included as hidden field `_csrf` in forms (POST only).
+  ```html
+  <input type="hidden" name="_csrf" value="random-token"/>
+  ```
+  Server compares received token with session token. Attacker can't guess token → CSRF blocked.
+
+  *SameSite:* `Lax` (default) blocks POST CSRF but not GET → *never use GET for state changes!* \
+  Use *both* CSRF tokens AND SameSite for defense in depth.
+
+  #inline("Secure Session Handling")
+  *Cookie attributes:*
+  - `Secure`: Only HTTPS (prevents sniffing over HTTP)
+  - `HttpOnly`: No JS access (`document.cookie` blocked → limits XSS impact)
+  - `SameSite=Lax`: Blocks cross-site POST (CSRF protection)
+  - No `expires`: Session cookie (deleted on browser close)
+
+  *Session ID requirements:* Long & random (≥128 bits), *change on login*, destroyed on logout.
+
+  #subinline("Session Fixation")
+  Spring Security *automatically rotates session ID after login* (only with built-in auth, not custom login!).
+
+  #subinline("Logout")
+  POST to `/logout` destroys session, creates new anonymous session. Configure redirect:
+  `.logout(l -> l.logoutSuccessUrl("/public/products?logout=true"))`
+
+  ```toml
+  # application.properties
+  server.servlet.session.cookie.http-only=true
+  server.servlet.session.cookie.secure=true
+  server.servlet.session.cookie.same-site=lax
+  server.servlet.session.timeout=10m
+  ```
+
+  #inline("Input Validation (Bean Validation)")
+  Jakarta EE framework: *whitelisting* approach (define what's allowed).
+  ```java
+  public class Purchase {
+    @NotNull(message = "Missing")
+    @Pattern(regexp = "^[a-zA-Z']{2,32}$", message = "Invalid name")
+    private String firstname;
+    @CreditCardCheck // custom annotation
+    private String creditCardNumber;
   }
   ```
-  - `authorizeHttpRequest`: all requests are permitted without authentication (per default, Spring Security requires authentication for all requests)
-  - `requiresChannel`: all requests to HTTP are redirected to HTTPS
-  - `csrf`: disable Cross-Site Request Forgery protection
-  #inline("Preventing Information leakage in Error Messages")
-  1. Add Spring templates for each type of errors (`500.html`, ...) to show a generic message
-  2. Remove the following from `application.properties`:
-    ```toml
-    server.error.whitelabel.enabled=false
-    server.error.include-exception=true
-    server.error.include-message=always
-    server.error.include-stacktrace=always
-    ```
-  3. Catch errors and `return 0` inside `catch` blocks
-  #inline("Data Sanitation")
-  // #image("brianisinthekitchen.png")
-  Risk of Reflected XSS vulne (`<script>alert("XSS")</script>`) \
-  2 fixes:
-  1. Input validation: Do not accept search strings that include JavaScript code
-  2. Data sanitation: Encode critical control characters before the search string is included in the webpage (e.g., replace `<` with `&lt;`) (`th:text` in Thymeleaf) \
-    *Required* because:
-    1. Users might want to search for JS code
-    2. Input validation might be turned off for new user needs in the future
-  *Important*: perform sanitation for all content that comes from external components (i.e. not the server code): client, database, file...
-  #inline("Secure Database Access (SQL inj)")
-  Use prepared statements
+  Common annotations: `@NotNull`, `@Size(min, max)`, `@Pattern(regexp)`, `@Min`, `@Max`, `@Email` \
+  *Gotcha:* `@Pattern` returns true for null → always combine with `@NotNull`!
+
+  *Controller:* `@Valid` triggers validation, `BindingResult` captures errors.
   ```java
-  String sql = "SELECT * FROM Product WHERE Description LIKE ?";
-  return jdbcTemplate.query(sql, new ProductRowMapper(), "%" + description + "%");
+  public String save(@ModelAttribute @Valid Purchase p, BindingResult result) {
+    if (result.hasErrors()) { return "checkout"; } // show form again with errors
   ```
+  *Template:* `th:if="${#fields.hasErrors('firstname')}"` + `th:errors="*{firstname}"`
 
-  ```java
-  String sql = "INSERT INTO Purchase (Firstname, Lastname, CreditCardNumber, TotalPrice) "
-  + "VALUES (?, ?, ?, ?)";
-  return jdbcTemplate.update(sql, purchase.getFirstname(), purchase.getLastname(),
-  purchase.getCreditcardnumber(), purchase.getTotalprice());
-  ```
-  #subinline("Bad JPA examples")
-  Good: Always extend `CrudRepository`.
-  Note: JPQL does not support UNION \
+  #subinline("Custom Validation")
+  Create annotation with `@Constraint(validatedBy = MyValidator.class)` + class implementing `ConstraintValidator<AnnotationType, FieldType>` with `isValid()` method.
 
-  Used JPA directly via class `EntityManager`and used JPQL query using string concatenation. ```sql no-match%' OR '%' = '```
-  ```java
-  public class ProductVulnerableRepository {
-    @PersistenceContext
-    private EntityManager entityManager;
-    public List<Product> findByDescriptionContaining(String description) {
-      Query query = entityManager.createQuery("SELECT p FROM Product p
-      WHERE p.description LIKE '%" + description + "%'");
-      return query.getResultList();
-    }
-  ```
-  `EntityManager` is used, together with a native query and string concatenation
-  ```java
-  public List<Product> findByDescriptionContaining(String description) {
-    Query query = entityManager.createNativeQuery("SELECT * FROM Product
-    WHERE Description LIKE '%" + description + "%'");
-    List<Object[]> results = query.getResultList();
-    List<Product> products = new ArrayList<>();
-    Product product;
-    for (Object[] result : results) { // copy from results to products }
-    return products;
-  }
-  ```
-  #inline("Authentication and Access Control")
-  #subinline("Secure Storage of Passwords")
-  No plaintext or level-1 hashes. Use complex hashing (bcrypt, Argon2...) or 5000+ rounds of fast hashing (SHA-512, `Hash = SHA-512(SHA-512(...|salt|password))`).
-  *bcrypt*: `$<version>$<cost>$<salt><hash>` (cost = rounds, salt&hash char counts)
-  #subinline("Authentication Mechanism")
-  - *HTTP basic auth*: shows a login dialog when server returns a 401, send the username+pw as a (base64-encoded) HTTP Authorisation Header in *every* future REST call. *Can only be cleared by closing the browser.* There is no logout feature.
-    ```java http
-    .authorizeHttpRequests(...)
-    .httpBasic(withDefaults()) ```
-  - *Form auth*:
-    *Always use POST not GET* (GET includes the form data as URL params)
-    ```java
-    http
-    .authorizeHttpRequests( ... )
-    .formLogin(formLoginConfigurer-> formLoginConfigurer
-    .loginPage("/public/login")
-    .failureUrl("/public/login?error=true")
-    .permitAll())
-    ```
-    #subinline("CSRF protection (Cross-Site Request Forgery)")
-    Set `SameSite` to _Lax_ in `application.properties`
-
-    #subinline("Sessions")
-    `Set-Cookie: session-id=28A46...; expires=Fri, 23-Dec-2035 11:09:37 GMT; Domain=www.example.com; Path=/myexample; Secure; HttpOnly; SameSite=Lax`
-    - `session-id=...`: The name & value of the cookie session ID. Must be long and random.
-    - `expires`: if no expiry date is used, the cookie is deleted when closing the browser (*good for session cookies*)
-    - `Domain`, `Path`: Any request to resources below `www.example.com/myexample/` includes the cookie
-    - `Secure`: Only send the cookie over HTTPS
-    - `HttpOnly`: JavaScript cannot access the cookie via `document.cookie`
-    - `SameSite`: Specifies when cookies should be included in cross-site requests (_Lax_: only GET requests)
-
-    In `application.properties`:
-    ```toml
-    server.servlet.session.cookie.http-only=true
-    server.servlet.session.cookie.secure=true
-    server.servlet.session.timeout=10m
-    ```
-
-    #subinline("Input validation")
-    ```java
-    @GetMapping("/public/products")
-    public String productsPage(@ModelAttribute @Valid ProductSearch productSearch, BindingResult bindingResult, Model model) {
-      if (bindingResult.hasErrors()) {
-        model.addAttribute("products", new ArrayList<Product>());
-        productSearch.setDescription("");
-        model.addAttribute("productSearch", productSearch);
-      }
-
-
-    public class ProductSearch {
-      @Size(max = 50, message = "No more than 50")
-      private String description = "";
-    ```
-
-    `@Valid` tells Spring to enforce the `@Size` constraint. It stores the result in `BindingResult`. If there is an error, we show an empty product list.
+  #subinline("Encoding Attacks")
+  Input validation alone may not prevent attacks if app decodes data later.
+  - Attacker encodes `<script>` as `%3Cscript%3E` (URL encoding) → passes validation (only letters/digits/%)
+  - If app URL-decodes before output → XSS possible
+  - *Best practice:* Don't decode, or decode first then validate. Sanitation (encode `<` → `&lt;`) is primary defense.
 ])
 
 = Secure CSR webapps (SDL 3 & 4)
