@@ -694,69 +694,110 @@
   - *Best practice:* Don't decode, or decode first then validate. Sanitation (encode `<` → `&lt;`) is primary defense.
 ])
 
-= Secure CSR webapps (SDL 3 & 4)
+= Secure CSR Web Applications (SDL 3 & 4)
 
 #concept-block(body: [
-  #inline("JSON Web Tokens")
-  #subinline("Structure")
-  Header
-  ```json
-  {
-    "alg":"HS256" // which MAC algo to use
-  }
-  ```
-  Payload
-  ```json
-  {
-    "iss":"Marketplace", // issuer
-    "sub":"alice", // subject
-    "exp":"1749281266" // expiry date
-  }
-  ```
-  MAC (Message Authentication Code)
-  ```
-  HMAC-SHA256(header + "." + payload, key) // key known only by REST service server/backend
-  ```
-  Final full token
-  #text(fill: red, "Base64(header)")\.#text(fill: green, "Base64(payload)")\.#text(fill: blue, "Base64(MAC)")
-  #subinline("Props")
-  - cannot be forged due to secret HMAC key
-  - expires
-  - verifying the HMAC is fast
-  - stateless (self-contained)
-  - URL safe (no char encoding)
-  #subinline("How")
-  1. User authenticates using username+pw
-  2. Backend checks the pair in DB. If correct, it generates a JWT and sends it back
-  3. Client includes the JWT in every request
-  4. Backend extracts the username from the token
-  #inline("Erros")
-  - `CustomAccessDeniedHandler`: access control error (insufficient perm)
-  - `InvalidParameterException`: Auth failed or invalid ID passed
-  - `MethodArgumentNotValidException`: `@Valid` is used and validation fails
-  - `ConstraintViolationException`: Bean Validation annotations are used with method parameters (e.g., @`Min` and `@Max`) and validation fails
-  - `MethodArgumentTypeMismatchException`: Thrown if a path parameter has the wrong type (e.g., a purchase ID of type int is expected, but a string is received)
-  - `RuntimeException`: Thrown if storing a purchase in the database does not work
-  #inline("Config")
-  ```java
-  // filter every request with the auth checker
-  http.addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
-  .exceptionHandling(exception -> exception
-  .accessDeniedHandler(accessDeniedHandler)
-  .authenticationEntryPoint(authenticationEntryPoint))
-  .cors(Customizer.withDefaults());
+  #inline("REST API Basics")
+  - *Stateless*: No sessions, every request must include all info (auth token) for server to process
+  - *HTTP methods*: GET (read), POST (create), PUT (replace), PATCH (partial update), DELETE (delete)
+  - *JSON format* for data, meaningful URLs (e.g., `/customers/1234`)
 
-  CorsConfiguration config = new CorsConfiguration();
-  config.setAllowedOrigins(Arrays.asList("*"));
+  #subinline("Spring REST Controller")
+  ```java
+  @RestController  // returns JSON, not templates
+  @RequestMapping("/rest")
+  public class Controller {
+      @GetMapping("/products")
+      public List<Product> get() { ... }  // returns JSON array
+      @PostMapping(value = "/purchases", consumes = APPLICATION_JSON_VALUE)
+      public void post(@RequestBody @Valid Checkout c) { ... }  // JSON → DTO
+      @DeleteMapping("/purchases/{id}")
+      public void delete(@PathVariable int id) { ... }  // URL param
+  }
+  ```
+
+  #inline("JWT Authentication")
+  Why JWT? Sending username/password every request = expensive bcrypt hash. \
+  JWT = token issued once, verified cheaply with HMAC. Stateless (server stores nothing).
+
+  #subinline("Structure")
+  `Base64(Header).Base64(Payload).Base64(MAC)`
+  - *Header*: `{"alg":"HS256"}` (MAC algorithm)
+  - *Payload*: `{"iss":"...", "sub":"alice", "exp":"..."}` (issuer, subject, expiry)
+  - *MAC*: `HMAC-SHA256(header.payload, secretKey)` → can't forge without key
+
+  #subinline("Flow")
+  1. Client POSTs credentials → server verifies against DB
+  2. Server creates JWT with username, returns it
+  3. Client includes JWT in every request: `Authorization: Bearer <token>`
+  4. Server validates JWT, extracts username, sets `SecurityContext` for *this request only*
+
+  #inline("Exception Handling")
+  - *401 Unauthorized*: `CustomAuthenticationEntryPoint` (missing/invalid JWT)
+  - *403 Forbidden*: `CustomAccessDeniedHandler` (valid JWT but wrong role)
+  - *400 Bad Request*: `GlobalExceptionHandler` (`@RestControllerAdvice`)
+    - `InvalidParameterException`, `MethodArgumentNotValidException`, `ConstraintViolationException`, `MethodArgumentTypeMismatchException`
+
+  #inline("SecurityConfig for REST")
+  ```java
+  http.sessionManagement(s -> s.sessionCreationPolicy(STATELESS))  // no sessions
+      .csrf(csrf -> csrf.disable())  // JWT in header, not cookies → no CSRF risk
+      .addFilterBefore(jwtFilter, ...)  // JWT filter runs first in chain
+      .exceptionHandling(e -> e.accessDeniedHandler(...).authenticationEntryPoint(...))
+      .cors(Customizer.withDefaults());  // enable CORS
+  ```
+
+  #inline("CORS (Cross-Origin Resource Sharing)")
+  - *Origin* = protocol + host + port (all three must match!)
+  - *Simple requests* (GET/POST, no auth header, no JSON): browser allows by default
+  - *Non-simple requests* (DELETE, Authorization header, JSON): need CORS config
+
+  #subinline("Preflight Requests")
+  Browser sends `OPTIONS` first to ask if request is allowed:
+  ```http
+  OPTIONS /rest/admin/purchases/3
+  Access-Control-Request-Method: DELETE
+  Access-Control-Request-Headers: authorization
+  ```
+  Server responds with what's allowed:
+  ```http
+  Access-Control-Allow-Origin: https://localhost:8081
+  Access-Control-Allow-Methods: OPTIONS, GET, POST, DELETE
+  Access-Control-Allow-Headers: authorization
+  ```
+  If allowed → browser sends actual request.
+
+  #subinline("CORS Config")
+  ```java
+  config.setAllowedOrigins(Arrays.asList("https://localhost:8081")); // NOT "*"!
   config.setAllowedMethods(Arrays.asList("OPTIONS", "GET", "POST", "DELETE"));
   config.setAllowedHeaders(Arrays.asList("*"));
-  UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
-  source.registerCorsConfiguration("/rest/**", config);
-  return source
   ```
-  #inline("CORS")
 
+  #inline("Client-Side Security")
+
+  #subinline("CSRF Mitigation")
+  - *Best*: Restrict `Access-Control-Allow-Origin` to specific origin (not `*`)
+  - Use `Authorization` header with JWT, *not cookies*
+  - JWT in session storage = not accessible from different origin → CSRF blocked
+
+  #subinline("Token Storage")
+  - *Session storage* (preferred): private per tab, deleted on browser close
+  - *Local storage*: shared across tabs, persists (XSS in one tab compromises all)
+  - *Cookies*: BAD! Even `HttpOnly` cookies sent with `credentials:"include"` → CSRF possible
+    - `HttpOnly` only prevents *stealing* (`document.cookie`), not *sending*!
+
+  #subinline("XSS in SPAs")
+  - *Server XSS*: Not an issue (no HTML generated server-side in pure SPAs)
+  - *Reflected Client XSS*: Hard to exploit in SPAs (no server reflection of URL params)
+  - *Stored Client XSS*: Malicious data from DB/API executed when rendered (main risk!)
+  - *DOM-based XSS*: Client-side code processes untrusted data (URL params, DOM elements)
+  - *Prevention*: Use framework's default sanitization
+    - Angular: `{{ variable }}` = safe (sanitized), `[innerHTML]` with pipes = unsafe
+
+  #inline("Security Checklist")
+  1. Configure CORS restrictively (specific origins, not `*`)
+  2. Use `Authorization` header for JWT, not cookies
+  3. Store JWT in *session storage* (not local storage or cookies)
+  4. Prevent XSS: use framework's default sanitization, avoid unsafe bindings
 ])
-
-// TODEL -- course outline
-// #image("Screenshot 2025-12-06 185927.png")
