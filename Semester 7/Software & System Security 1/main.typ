@@ -79,7 +79,7 @@
   6. *Penetration testing*: Attack own system to verify requirements fulfilled + find bugs. Human testers more effective than automated tools
   7. *Security operations*: Patching, monitoring, backups, learn from attacks
 
-  #inline("Security Risk Analysis (horizontal activity)")
+  #inline("Security Risk Analysis (Horizontal Activity)")
   Runs throughout all phases. Rate risk of found problems: _risk = probability x impact_ → decide: accept or mitigate
 ])
 
@@ -801,3 +801,177 @@
   3. Store JWT in *session storage* (not local storage or cookies)
   4. Prevent XSS: use framework's default sanitization, avoid unsafe bindings
 ])
+
+= Security Requirements Engineering & Threat Modeling (SDL 1 & 2)
+
+#concept-block(body: [
+  #inline("Why Security Requirements Engineering?")
+  - If skipped: security flaws missed, can't do focused pen tests
+  - Functional-based requirements not enough (attacker is creative, needs ONE working attack point)
+  - Describes *what* must be protected, not *how* (tech implementation comes in Security Design/Controls)
+  - *Think like an attacker*: What would I want? How could I accomplish it?
+  - Iterative: SRE should be part of each dev iteration, requirements grow over time
+
+  #inline("The 5-Step Process")
+
+  #subinline("1. Identify Business & Security Goals")
+  - *Business goal*: 1-2 sentences (forces focus on main purpose)
+  - *Security goals*: 3-6 goals driven by business goal + policies/regulations
+  - Source: interviews with project owners
+
+  #subinline("2. Collect Information")
+  - Functions, users, data processed, *assets* (crown jewels)
+  - External dependencies (security implications outside your control)
+  - Existing security requirements
+  - Source: artifacts + interviews with engineers
+
+  #subinline("3. Decompose System (DFD)")
+  DFD (Data Flow Diagram) Elements:
+  #grid(
+    columns: 6,
+    gutter: 4pt,
+    align: center + horizon,
+    image("assets/dfd-process.png", height: 2.5em),
+    image("assets/dfd-multi-process.png", height: 2.5em),
+    image("assets/dfd-external-entity.png", height: 2.5em),
+    image("assets/dfd-data-store.png", height: 2.5em),
+    image("assets/dfd-data-flow.png", height: 2.5em),
+    image("assets/dfd-trust-boundary.png", height: 2.5em),
+
+    [Process], [Multi Process], [External Entity], [Data Store], [Data Flow], [Trust Boundary],
+  )
+  - *Process*: Task transforming input → output
+  - *Multi Process*: Collection of processes (e.g., entire web app)
+  - *External Entity*: Outside system (users, admins, 3rd party services)
+  - *Data Store*: Where data is stored (DB, config files, logs)
+  - *Data Flow*: Direction of data movement between components
+  - *Trust Boundary*: Components that should NOT auto-trust each other → security-critical areas
+
+  High-level DFD example:
+  #image("assets/dfd-example.png", width: 100%)
+
+  #subinline("4. Identify Threats (STRIDE)")
+  - #strong[S]poofing: Pretend to be someone/something else
+  - #strong[T]ampering: Modify data or code (at rest or in transit)
+  - #strong[R]epudiation: Deny action because no evidence links attacker
+  - #strong[I]nformation Disclosure: Unauthorized data access
+  - #strong[D]enial of Service: Prevent legitimate access
+  - #strong[E]levation of Privilege: Gain unauthorized access level
+
+  STRIDE to DFD mapping:
+  - *External Entity*: S, R
+  - *Data Flow*: T, I, D
+  - *Data Store*: T, R (only if logs), I, D
+  - *Process*: S, T, R, I, D, E (all)
+
+  #subinline("5. Rate Risk & Mitigate")
+  - For each threat: rate risk considering existing requirements
+  - If risk too high → vulnerability identified
+  - Define new security requirements to reduce risk to acceptable level
+
+  #inline("Threat Agents")
+  - *Script Kiddies*: Fun/fame, low skill. Free tools, low-hanging fruit
+  - *Insiders*: Revenge/profit, low-med skill. Abuse legitimate access, know protections
+  - *Hacktivists*: Embarrass orgs, low-med skill. DDoS, defacement
+  - *Cyber Criminals*: Profit, med-high skill. Phishing, ransomware, botnets
+  - *Nation States*: Intelligence, unlimited resources. Specific targets, will do anything
+  Key: Criminals pick easy targets, nation states persist until success
+
+  #inline("Key Non-Obvious Points")
+  - STRIDE often leads to *defense in depth* (multiple requirements protect same asset)
+  - Same attack goal can be achieved via *multiple DFD paths* → analyze all (attacker needs just ONE)
+  - Focus on DFD elements *near trust boundaries* (where attacks happen)
+  - Don't assume security exists (if not documented, assume it's not there)
+  - Don't forget insiders (malicious + accidental)
+  - Security requirements → Security design/controls (tech-specific implementation)
+])
+
+= Security Risk Analysis (Horizontal Activity)
+
+#concept-block(body: [
+  #inline("Purpose")
+  - Rate *risk* (criticality) of vulnerabilities, threats, bugs → decide whether to address or not
+  - Complements: threat modeling, code review, pen testing, operations
+
+  #inline("The 4-Step Process")
+  1. *Identify vulnerabilities*: Via threat modeling, pen testing, code review
+    - Document: attack, threat agent, vulnerabilities, existing controls
+  2. *Estimate likelihood & impact*: For each vulnerability
+  3. *Determine risk*: Based on likelihood x impact
+  4. *Risk mitigation*: Decide actions, implement corrective measures
+
+  #inline("Quantitative vs Qualitative")
+  - *Quantitative*: ALE = SLE x ARO (annual financial loss)
+    - SLE = Single Loss Expectancy (cost per incident)
+    - ARO = Annualized Rate of Occurrence (incidents/year)
+    - Example: DB breach every 5y, costs 100k → ALE = 100k x 0.2 = 20k/year
+    - Hard to estimate for IT risks (unknown attacker behavior)
+  - *Qualitative*: Likelihood & impact as levels (Low/Med/High) → preferred in practice
+
+  #inline("NIST 800-30")
+  Simple methodology, 3 levels each for likelihood & impact:
+  - *Likelihood*:
+    - High: Threat agent motivated & capable, controls ineffective
+    - Medium: Motivated & capable, but controls provide some protection
+    - Low: Lacks motivation/capability, or controls prevent
+  - *Impact*:
+    - High: Highly costly loss, significant harm to mission/reputation, death/serious injury
+    - Medium: Costly loss, harm to mission/reputation, injury
+    - Low: Some loss, noticeably affects mission/reputation
+
+  #inline("OWASP Risk Rating")
+  More structured: rate factors 0-9, average them. If factor irrelevant → skip (-)
+
+  *Likelihood = avg of 8 factors:*
+
+  Threat Agent:
+  - Skill: none(1), some(3), advanced(4), network/prog(6), security(9)
+  - Motive: low reward(1), possible(4), high reward(9)
+  - Opportunity: full access needed(0), special(4), some(7), none needed(9)
+  - Size: devs(2), sysadmins(2), intranet(4), partners(5), auth'd(6), anon(9)
+
+  Vulnerability:
+  - Ease of discovery: impossible(1), difficult(3), easy(7), automated(9)
+  - Ease of exploit: theoretical(1), difficult(3), easy(7), automated(9)
+  - Awareness: unknown(1), hidden(4), obvious(6), public(9)
+  - Intrusion detection: active(1), logged+reviewed(3), logged only(8), none(9)
+
+  *Impact = avg of 4 factors:*
+  - Financial: less than fix(1), minor profit effect(3), significant(7), bankruptcy(9)
+  - Reputation: minimal(1), accounts lost(4), goodwill(5), brand damage(9)
+  - Non-compliance: minor(2), clear violation(5), high profile(7)
+  - Privacy: 1 person(3), hundreds(5), thousands(7), millions(9)
+
+  Map averages: 0-3 = Low, 3-6 = Medium, 6-9 = High
+
+  #inline("Risk Matrix (both methods)")
+  #table(
+    columns: (auto, auto, auto, auto),
+    stroke: 0.3pt,
+    inset: 2pt,
+    [], [*Impact Low*], [*Impact Med*], [*Impact High*],
+    [*Likelihood High*], table.cell(fill: rgb("ffe066"))[Medium], table.cell(fill: rgb("ffa94d"))[High], table.cell(fill: rgb("ff6b6b"))[Critical],
+    [*Likelihood Med*], table.cell(fill: rgb("8ce99a"))[Low], table.cell(fill: rgb("ffe066"))[Medium], table.cell(fill: rgb("ffa94d"))[High],
+    [*Likelihood Low*], table.cell(fill: rgb("dee2e6"))[Info], table.cell(fill: rgb("8ce99a"))[Low], table.cell(fill: rgb("ffe066"))[Medium],
+  )
+  - *Critical*: Stop operations, fix immediately
+  - *High*: Fix ASAP (days to weeks)
+  - *Medium*: Fix within reasonable time (next release)
+  - *Low/Info*: Accept or fix if easy
+
+  #inline("Risk Mitigation Options")
+  - *Accept*: Risk too small, corrective action not worth it
+  - *Reduce*: Implement measures to lower likelihood or impact
+  - *Avoid*: Remove the functionality entirely
+  - *Transfer*: Insurance, outsource
+  - *Ignore*: Know the risk but do nothing (bad practice)
+
+  #inline("Key Points")
+  - Combine methods: NIST 800-30 for most, OWASP for uncertain cases
+  - Risk analysis is subjective → do in team for better results
+  - Don't over-precise with OWASP (4 vs 5 doesn't matter much)
+  - Be pessimistic when unsure
+  - Cost-effective solutions: don't spend more than expected damage
+  - *Black Swans*: Low likelihood + High impact = Medium, but can be devastating → may have to accept and live with such risks
+])
+
