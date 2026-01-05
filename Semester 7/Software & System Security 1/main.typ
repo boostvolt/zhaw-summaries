@@ -243,6 +243,8 @@
   - *Finding URLs*: Guess patterns (`/customer` → `/admin`), access logs, open-source code
   - *Counter*: Check user role/permissions before granting URL access (usually framework-configurable)
 
+  #colbreak()
+
   #subinline("Object Level")
   User abuses function to access *objects* they shouldn't (e.g., `?pid=1` → `?pid=2`)
   - *Exposed identifiers*: file name, user ID, product ID, database key
@@ -273,102 +275,127 @@
   Both miss logic vulnerabilities (access control, param tampering) → manual testing required
 ])
 
-= Buffer overflow & race cond (SDL 3 & 4)
+= Buffer Overflow & Race Conditions (SDL 4)
 
 #concept-block(body: [
-  #inline("Buffer overflows")
-  Modify the program flow, crash the program, inject (malicious) own code, access sensitive information...
+  #inline("Buffer Overflow")
+  - Write/read data *beyond end of allocated buffer* in memory
+  - Consequences: modify program flow, crash, inject code, access sensitive data
+  - Kingdom: *Input Validation and Representation*
+  - Only in *C/C++* (no runtime bounds checking). Java/.NET safe (JVM checks, throws `ArrayIndexOutOfBoundsException`)
+  - But: JVM itself written in C → may have buffer overflow vulnerabilities
+  - Can happen on heap too, but *stack most common* attack target
 
+  #subinline("Memory Layout")
   #grid(
-    columns: (auto, auto),
-    // image("buffo0.png"),
+    columns: (2fr, 10fr),
+    gutter: 8pt,
+    align: horizon,
+    image("assets/memory-layout.png"),
     [
-      *`area` execution (leaf function)* \
-      `rbp == rsp` bc we use *Red Zone* opti. Local vars stored using neg. offsets of `rbp` (no `subq` instr.)
-    ],
-
-    // image("buffo1.png"),
-    [
-      *`main` return (non-leaf)*
-      `rsp` points to top of stack to clearly delimitate `main`'s memory (no Red Zone opti)
+      *Virtual address space*, low → high:
+      - *Code*: Instruction pointers should point here
+      - *Data*: Global and static variables
+      - *Heap*: Dynamic memory (`malloc`/`new`). Grows ↑
+      - *Stack*: Local vars, return addresses. Grows ↓
     ],
   )
 
-  #subinline("Exploit example")
-  ```c
-  void processData(int socket) {
-    char buffer[256], tempBuffer[12];
-    int count = 0, position = 0;
+  #subinline("Stack Mechanics")
+  - *Stack frame*: Created per function call, destroyed on return
+  - *Stack Pointer (rsp)*: "Where am I now?" → moves on every push/pop
+  - *Base Pointer (rbp)*: "Where did my frame start?" → stays fixed, access local vars via offsets (`rbp-4`, `rbp-8`)
+  - *old rbp*: Saved so caller's frame can be restored after return
+  - *return address*: Where to jump back after function completes
+  - Frame layout (low → high): `[local vars] [old rbp] [ret addr]`
 
-    /* Read data from socket and copy it into buffer */
-    count = recv(socket, tempBuffer, 12, 0);
-    while (count > 0) {
-      memcpy(buffer + position, tempBuffer, count)
-      position += count;
-      count = recv(socket, tempBuffer, 12, 0);
-    }
+  #image("assets/stack-frame.png")
 
-    return 0;
-  }
-  ```
+  #subinline("How Exploitation Works")
+  1. Vulnerable function has buffer on stack (e.g., `char buffer[256]`)
+  2. Attacker provides input exceeding buffer size (e.g., via network socket)
+  3. Overflow overwrites: local vars → old rbp → *return address*
+  4. Attacker crafts input: attack code + address pointing back to buffer
+  5. On function return, CPU jumps to attacker's code instead of caller
 
-  // #grid(
-  //   columns: (28%, auto),
-  //   // image("buffoexploit.png"),
-  //   [
-  //     - Attacker sends more than `256 bytes` through socket.
-  //     - Bytes `265` to `272` overwrite `ret address`. Attacker can replace it with the beginning addr. of buffer.
-  //     - Bytes `0` to `264` contain attack code.
-  //     - Attack code runs with same privileges as program.
-  //   ],
-  // )
+  *Key insight*: Attack code runs with *privileges of exploited program* → always run with minimal privileges
 
-  - *Counters:* Check boundaries for any input/output op, avoid `gets`, `strcpy`, static code ana & fuzzing, forbid exec of code in mem data segments,  Address Space Layout Randomisation (ASLR),
+  Exploitable when attacker controls input: command-line args, local data, *network data* (remote exploitation)
 
-  #subinline("Stack canaries")
-  - Random 8 bytes val gen at start if program
-  - Pushed to stack right after `old rbp`
-  - Before returning to calling function, stack value is compared to saved generated value
-  - Program crashes/terminates if they don't match
+  #subinline("Countermeasures")
+  *1. Good Programming (primary defense):*
+  - Validate all input, check buffer boundaries before write/read
+  - Avoid unsafe functions: `gets`, `strcpy`, `sprintf` → `fgets`, `strncpy`, `snprintf`
 
-  #inline("Race conditions")
-  #subinline("TOCTOU (Time of Check Time of Write)")
-  ```c
-  if(!access(file, W_OK)) {
-    printf("Enter data to write to file: ");
-    fgets(data, 100, stdin);
-    fd = fopen(file, "w+");
-    if (fd != NULL) {
-      fprintf(fd, "%s", data);
-    }
-  } else {  /* user has no write access */
-    fprintf(stderr, "Permission denied when trying to open %s.\n", file);
-  }
-  ```
-  Attacker can change the file `file` points to after the `if` check passed but before writing starts, e.g. using a symlink to a sensitive file he shouldn't access \
-  *Counters:*
-  - use as little functions that take filename as arg as possible. Use it for initial file access and return a reusable file descriptor (e.g. used to check write perm).
-  - Let the OS handle perm checks and avoid running prog as root user.
+  *2. Automated Testing:*
+  - Static code analysis (find patterns)
+  - Fuzzing (throw random inputs, observe crashes)
 
+  *3. Compiler Protections:*
+  - `-fstack-protector`: Enable stack canaries
+  - `-D_FORTIFY_SOURCE=2`: Boundary checks around critical ops
+
+  *4. OS/Hardware Protections:*
+  - *NX bit* (Non-eXecutable): Prevent code execution in data segments (stack/heap)
+  - *ASLR*: Randomize segment addresses at load time → attacker can't predict addresses
+    - Requires compilation as PIE (Position Independent Executable)
+
+  #subinline("Stack Canaries")
+  - Random value (8 bytes) generated at *program start*
+  - Pushed to stack *between local vars and old rbp*
+  - Before function returns: check if canary value unchanged
+  - If changed → program *terminates immediately* (prevents exploitation)
+
+  Stack layout: `[buffer] [canary] [old rbp] [ret addr]`
+
+  Why it works: To overwrite ret addr, attacker must also overwrite canary → detected (unless attacker knows/guesses value)
+
+  #subinline("Why Problem NOT Solved")
+  - Protection features not always enabled/available (embedded, mobile, sensors)
+  - *Read overflows* not prevented by these measures
+  - Bypass techniques exist: *Return-Oriented Programming (ROP)*
+  - Detection = termination → *availability* impact
+  - *Conclusion*: Prevent in code, treat protections as second line of defense (defense in depth)
+
+  #inline("Race Conditions")
+  - Multiple threads/processes share resources + timing affects correctness
+  - Hard to detect in testing (controlled environments), hard to reproduce
+  - Kingdom: *Time and State*
+  - Usually robustness/availability issues, but can have *security implications*
+
+  #colbreak()
+
+  #subinline("Thread-Based Race Condition")
   ```java
-  public class SessionIDGenerator {
-    private static Random rng = new Random();
-    private static String newSessionID
+  private static String sessionID;  // Shared!
+  public static void create() { sessionID = generateRandom(); }
+  public static String get() { return sessionID; }
+  ```
+  Race: A creates → B creates → A gets → *gets B's ID* → two users share session
 
-    public static void createSessionID() {
-      byte[] randomBytes = new byte[16];
-      rng.nextBytes(randomBytes);
-      newSessionID = Util.toHexString(randomBytes);
-    }
+  Fix: Return ID directly from create(), don't use shared variable
 
-    public static String getSessionID() {
-      return newSessionID;
-    }
+  Also: `Random` not cryptographically secure → use `SecureRandom` (API Abuse)
+
+  #subinline("TOCTOU (Time-of-Check, Time-of-Use)")
+  ```c
+  if(!access(file, W_OK)) {    // Check: user has write access?
+    fgets(data, 100, stdin);
+    fd = fopen(file, "w+");    // Use: open file for writing
+    fprintf(fd, "%s", data);
   }
   ```
-  1. Thread A calls `create`
-  2. Thread B calls `create`
-  3. Thread A calls `get`. But it will get User B's session ID.
+  Attack (program runs as root):
+  1. Create file `dummy`, symlink `pointer → dummy`
+  2. Start program, pass `pointer` as file
+  3. After access() check passes, before fopen(): `rm pointer; ln -s /etc/shadow pointer`
+  4. Program writes to `/etc/shadow` → attacker gains write access to any file
+
+  *Countermeasures:*
+  - Minimize functions taking filename as input. Use file once → get *file descriptor* for further ops
+  - Open file first, then check access rights on file descriptor (not path)
+  - Let OS handle permission checks, avoid running programs as root
+  - If must run with high privileges → think especially hard about security
 ])
 
 = Fundamental Security Principles (SDL 1, 2 & 3)
@@ -459,6 +486,8 @@
   SecretKeySpec keySpec = new SecretKeySpec(rawBytes, "AES");
   ```
   Password-based keys are *weak* → use long random data or proper key derivation (PBKDF2).
+
+  #colbreak()
 
   #subinline("Symmetric Encryption (Cipher)")
   `Cipher.getInstance("algo/mode/padding")` — *"AES" alone defaults to AES/ECB/PKCS5Padding!*
@@ -726,6 +755,8 @@
   - *Payload*: `{"iss":"...", "sub":"alice", "exp":"..."}` (issuer, subject, expiry)
   - *MAC*: `HMAC-SHA256(header.payload, secretKey)` → can't forge without key
 
+  #colbreak()
+
   #subinline("Flow")
   1. Client POSTs credentials → server verifies against DB
   2. Server creates JWT with username, returns it
@@ -950,9 +981,18 @@
     stroke: 0.3pt,
     inset: 2pt,
     [], [*Impact Low*], [*Impact Med*], [*Impact High*],
-    [*Likelihood High*], table.cell(fill: rgb("ffe066"))[Medium], table.cell(fill: rgb("ffa94d"))[High], table.cell(fill: rgb("ff6b6b"))[Critical],
-    [*Likelihood Med*], table.cell(fill: rgb("8ce99a"))[Low], table.cell(fill: rgb("ffe066"))[Medium], table.cell(fill: rgb("ffa94d"))[High],
-    [*Likelihood Low*], table.cell(fill: rgb("dee2e6"))[Info], table.cell(fill: rgb("8ce99a"))[Low], table.cell(fill: rgb("ffe066"))[Medium],
+    [*Likelihood High*],
+    table.cell(fill: rgb("ffe066"))[Medium],
+    table.cell(fill: rgb("ffa94d"))[High],
+    table.cell(fill: rgb("ff6b6b"))[Critical],
+    [*Likelihood Med*],
+    table.cell(fill: rgb("8ce99a"))[Low],
+    table.cell(fill: rgb("ffe066"))[Medium],
+    table.cell(fill: rgb("ffa94d"))[High],
+    [*Likelihood Low*],
+    table.cell(fill: rgb("dee2e6"))[Info],
+    table.cell(fill: rgb("8ce99a"))[Low],
+    table.cell(fill: rgb("ffe066"))[Medium],
   )
   - *Critical*: Stop operations, fix immediately
   - *High*: Fix ASAP (days to weeks)
