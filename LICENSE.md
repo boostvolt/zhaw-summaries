@@ -1,1 +1,1 @@
-Copyright © 2023 Boostvolt (Jan). All rights reserved.
+Copyright © 2026 Jan Kott (boostvolt). All rights reserved.
