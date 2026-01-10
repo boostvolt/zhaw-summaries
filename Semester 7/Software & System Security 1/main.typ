@@ -340,18 +340,42 @@
   - *return address*: Where to jump back after function completes
   - Frame layout (low → high): `[local vars] [old rbp] [ret addr]`
 
-  #image("assets/stack-frame.png")
+  #image("assets/stack-frame-main.png")
+  #image("assets/stack-frame-area.png")
 
   #subinline("How Exploitation Works")
-  1. Vulnerable function has buffer on stack (e.g., `char buffer[256]`)
-  2. Attacker provides input exceeding buffer size (e.g., via network socket)
-  3. Overflow overwrites: local vars → old rbp → *return address*
-  4. Attacker crafts input: attack code + address pointing back to buffer
-  5. On function return, CPU jumps to attacker's code instead of caller
+  #grid(
+    columns: (2fr, 1fr, 1fr),
+    gutter: 0pt,
+    align: horizon,
+    [
+      ```c
+      void processData(int socket) {
+        char buffer[256], tempBuffer[12];
+        int count = 0, position = 0;
+        count = recv(socket, tempBuffer, 12, 0);
+        while (count > 0) {
+          memcpy(buffer + position, tempBuffer, count);
+          position += count;
+          count = recv(socket, tempBuffer, 12, 0);
+        }
+      }
+      ```
+    ],
+    image("assets/stack-overflow-before.png", width: 80%),
+    image("assets/stack-overflow-after.png"),
+  )
 
-  *Key insight*: Attack code runs with *privileges of exploited program* → always run with minimal privileges
+  `recv(sock, buf, n, 0)` reads ≤n bytes into buf, returns count.
 
-  Exploitable when attacker controls input: command-line args, local data, *network data* (remote exploitation)
+  `memcpy(dst, src, n)` copies n bytes. *Bug*: no check if `position > 256`.
+
+  1. Attacker sends >256 bytes via socket (e.g., 272 bytes)
+  2. Overflow writes toward higher addresses: bytes 257-264 overwrite `old rbp`, bytes 265-272 overwrite `ret addr`
+  3. Payload structure: first 264 bytes = attack code, last 8 bytes = address of `buffer`
+  4. On `ret`, CPU jumps to `buffer` start → executes attacker's code
+
+  *Key insight*: Attack code runs with *privileges of exploited program* → always run with minimal privileges. Attacker can: access files, create accounts, install malware. Accidental overflow just crashes.
 
   #subinline("Countermeasures")
   *1. Good Programming (primary defense):*
@@ -381,9 +405,60 @@
 
   Why it works: To overwrite ret addr, attacker must also overwrite canary → detected (unless attacker knows/guesses value)
 
+  #subinline("Variable Reordering (gcc)")
+  With `-fstack-protector-all`, gcc reorders stack variables: buffers placed at *higher* addresses than pointers/scalars. Overflow writes toward higher addresses → can't reach pointers below buffer.
+
+  Without: `[buffer] [pointer] [old rbp] [ret addr]` → overflow overwrites pointer ✗
+
+  With: `[pointer] [buffer] [canary] [old rbp] [ret addr]` → pointer safe, canary detects overflow ✓
+
+  #subinline("Heap Read Overflow (Heartbleed)")
+  Different from stack overflow: *read* beyond buffer, not write.
+  ```c
+  // readRequest(): packet = [header:4B][payloadLen:2B][payload][padding]
+  unsigned int reqLen = readPacketHeader(csd);  // trusted length from header
+  unsigned char* req = malloc(reqLen);          // allocate exactly reqLen
+  recv(csd, req, reqLen, 0);                    // receive reqLen bytes
+
+  // sendResponse(): BUG - trusts payloadLen from client!
+  unsigned short payloadLen = 256*req[0] + req[1];  // read first 2 bytes
+  send(csd, req, 2 + payloadLen, 0);  // sends 2 + payloadLen bytes!
+  ```
+  *Bug*: `payloadLen` read from request, not validated against `reqLen`. If `payloadLen > reqLen - 2` → reads beyond allocated buffer.
+
+  *Attack*: Send `reqLen=3` (2B length + 1B payload) but set `payloadLen=65535` → server sends 65KB from heap.
+
+  *Why sensitive data exists*: `malloc()` reuses freed memory. Previous requests (credentials) `free()`d but data remains → new request at same address → old data leaked.
+
+  *Why protections don't help*: Heap (no stack), read-only (no write), sequential (no address guess). Fix: `if (payloadLen > reqLen - 2) reject();`
+
+  #subinline("Format String Vulnerability")
+  *How printf works*: Params 1-6 via registers (rdi, rsi, rdx, rcx, r8, r9), stored on printf's stack. Params 7+ read directly from *caller's stack frame*. Printf doesn't know how many params were actually passed → reads stack regardless.
+
+  *Bug: User controls format string*
+  ```c
+  printf(username);        // VULNERABLE: attacker controls format
+  printf("%s", username);  // SAFE: format string is fixed
+  ```
+  *Attack*: Enter username `%p%p%p%p%p%p` → printf expects 6 pointer params, reads from stack:
+  - Params 1-5: from printf's own stack frame
+  - Param 6+: from *caller's* (doLogin) stack frame → leaks local vars, canary, rbp
+
+  Use `%n$p` for direct access: `%12$p` reads 12th parameter position.
+
+  *What can be leaked*: Usernames, passwords, stack canary, saved rbp, return addresses. Attacker can map entire stack layout.
+
+  *Also a bug*: Format with more placeholders than params passed:
+  ```c
+  printf("Hello %s, age %d\n");  // 0 params → reads garbage from stack
+  ```
+  Not attacker-controlled, but may accidentally leak sensitive data.
+
+  *Why protections don't help*: Reading memory, not writing. Canaries/ASLR/NX irrelevant. Fix: Always use fixed format string.
+
   #subinline("Why Problem NOT Solved")
   - Protection features not always enabled/available (embedded, mobile, sensors)
-  - *Read overflows* not prevented → reading past buffer leaks secrets from stack (like Heartbleed)
+  - *Read overflows* not prevented → reading past buffer leaks secrets (Heartbleed, format strings)
   - *ROP (Return-Oriented Programming)* bypasses NX: chain existing code snippets ("gadgets") ending in `ret` to build arbitrary computation without injecting new code
   - Detection = termination → *availability* impact
   - *Conclusion*: Prevent in code, treat protections as second line of defense (defense in depth)
