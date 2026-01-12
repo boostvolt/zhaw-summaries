@@ -147,12 +147,22 @@
     - ```sql WHERE (userid=? AND password='') OR ''=''``` → first part fails, but ```sql ''=''``` is TRUE
     - If app only reads first row: use `LIMIT offset,1` to select which row (e.g., ```sql ' OR 1=1 LIMIT 4,1#``` → 5th row)
   - *UNION attack*:
-    1. *Find column count*: Try ```sql ' UNION SELECT 1--```, ```sql ' UNION SELECT 1,2--```, etc. until no error. Use Burp Intruder (Sniper) to automate.
-    // TODO: Match types too? Example?
-    2. *Extract data*: ```sql ' UNION SELECT col1,col2,... FROM table--``` (columns must match count AND types)
-  - *Schema discovery*:
-    - Tables: ```sql UNION SELECT TABLE_NAME,... FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE()--```
-    - Columns: ```sql UNION SELECT COLUMN_NAME,... FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='target'--```
+    1. *Find column count*: Try ```sql ' UNION SELECT NULL--```, ```sql ' UNION SELECT NULL,NULL--```, etc. until no error
+    2. *Extract data*: ```sql ' UNION SELECT col1,col2,... FROM table--``` (column count must match original query)
+  - *Schema discovery* (find tables/columns first):
+    - Tables: ```sql UNION SELECT TABLE_NAME,NULL,... FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE()--```
+    - Columns: ```sql UNION SELECT COLUMN_NAME,NULL,... FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='target'--```
+  - *UNION attack example*:
+    ```java
+    // Vulnerable: string concat
+    String q = "SELECT HotelID, Desc, City, Price FROM Hotel " +
+               "WHERE City LIKE '%" + city + "%' AND Price <= " + price;
+    ```
+    Goal: Extract `CCNumber`, `CVV`, `FullName` from `Customer` table (4 columns needed to match)
+    - *city*: `' UNION SELECT 1, CCNumber, FullName, CVV FROM Customer--`
+    - *price*: `100` (anything valid, won't be reached)
+    - Result query: `...LIKE '%' UNION SELECT 1, CCNumber, FullName, CVV FROM Customer--%' AND...`
+    - The `--` comments out rest → returns all customer data instead of hotels
   - *MySQL functions*:
     - `LIMIT offset,count` → pagination (`LIMIT 4,1` = 5th row, 0-indexed)
     - `GROUP_CONCAT(col)` → merge all rows into single string (useful for extracting multiple values)
@@ -164,9 +174,7 @@
   - *Multiple queries*: `;` separator only works if server uses `executeBatch()`
   - *INSERT injection*: ```sql userpass'), ('admin', 'Superuser', 'adminpass')--```
   - *Response fingerprinting* (Blind SQLi): Different error for "valid user, wrong pass" vs "invalid user" → oracle for user enumeration
-  - *Counter*:
-    - *Prepared statements*: Query parsed with `?` placeholders, input bound separately → always data, never code
-    - *Escaping* (weaker): Transform `'` → `\'`, error-prone (encoding issues, incomplete escaping)
+  - *Counter*: Prepared statements. Escaping (`'` → `\'`) is weaker - encoding issues, incomplete.
 
   #subinline("OS Command Injection")
   - *Cause*: App executes OS commands with user input (Java `Runtime.exec()`, PHP `system()`)
@@ -821,11 +829,20 @@
   - File uploads: Validate Content-Type, store outside webroot, strip scripts from SVGs
 
   #inline("SQL Injection Prevention")
-  *Never* string concatenation. Use *prepared statements* → query parsed first, then values bound as data (never code).
+  *Why SQLi happens*: User input becomes part of SQL string → attacker controls query structure.
+
+  *Fix: Prepared statements* → Query parsed with `?` placeholders first (structure fixed), then values bound as data. DB treats bound values as literal data, never as SQL syntax.
   ```java
+  // WRONG: String concatenation - input becomes SQL code
+  String q = "SELECT * FROM users WHERE name = '" + name + "'";
+  // If name = "' OR '1'='1" → becomes: WHERE name = '' OR '1'='1'
+
+  // RIGHT: Prepared statement - input stays data
   String sql = "SELECT * FROM users WHERE name = ? AND role = ?";
-  jdbcTemplate.query(sql, mapper, name, role); // safe - ? bound as data
+  jdbcTemplate.query(sql, mapper, name, role);
+  // If name = "' OR '1'='1" → searches for literal "' OR '1'='1"
   ```
+  *Why it works*: Query structure parsed BEFORE input added. `?` marks "data slot" - whatever goes there is literal value, not SQL syntax. Even `'`, `--`, `UNION` are just text.
 
   #inline("JPA (Jakarta Persistence API)")
   ORM framework: maps objects ↔ database tables. *Prevents SQLi* when used correctly.
@@ -850,7 +867,14 @@
         List<User> findByNameAndRole(String n, String r);
     }
     ```
-  - *Danger:* `EntityManager` + string concatenation or native queries = *SQLi possible!*
+  - *Danger:* `EntityManager` + string concatenation = *SQLi possible!*
+    ```java
+    // WRONG: String concat in JPQL
+    em.createQuery("SELECT u FROM User u WHERE u.name = '" + name + "'");
+
+    // RIGHT: Named parameter
+    em.createQuery("SELECT u FROM User u WHERE u.name = :n").setParameter("n", name);
+    ```
 
   #inline("Secure Password Storage")
   *Never* plaintext or simple hash → use *slow hash functions* (bcrypt, Argon2, PBKDF2, scrypt).
