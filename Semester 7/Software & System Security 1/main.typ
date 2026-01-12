@@ -1549,7 +1549,6 @@
   *Other*: ` ` → `%20` | `%` → `%25` | `&` → `%26` | `#` → `%23` \
   *Rule*: Decode BEFORE validation, never after!
 
-// TODO: go through
   #inline("Shell Metacharacters")
   - *Separators*: `;` (chain) | `|` (pipe) | `&` (background) | `&&` (if success) | `||` (if fail)
   - *Substitution*: ``` ` ` ``` or `$()` executes command, inserts output
