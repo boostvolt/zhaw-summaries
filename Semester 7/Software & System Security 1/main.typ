@@ -583,164 +583,213 @@
   - Don't try fixing invalid data → just reject it
 ])
 
-// TODO: Go through
 = Java Security (SDL 4)
 
 #concept-block(body: [
-  #inline("JCA (Java Cryptography Architecture)")
-  Provider-based architecture: CSPs (Cryptographic Service Providers) implement algorithms. \
-  Default providers included, 3rd party (e.g., Bouncy Castle) addable. Specify: `getInstance("SHA-256", "BC")`
-
-  #subinline("Hashing (MessageDigest)")
+  #inline("Random Numbers")
+  Foundation for keys, IVs, nonces. Must be unpredictable.
   ```java
-  MessageDigest md = MessageDigest.getInstance("SHA-256");
-  md.update(data); // feed data (can call multiple times)
-  byte[] hash = md.digest(); // compute hash
-  // or: byte[] hash = md.digest(data); // feed + compute
-  ```
-  *Secure:* SHA-256, SHA-512, SHA3-256, SHA3-512. *Insecure:* MD5, SHA-1 (only backwards compat!)
-
-  #subinline("Random Numbers")
-  `java.util.Random` is *NOT* cryptographically secure → use `SecureRandom`!
-  ```java
-  SecureRandom random = new SecureRandom(); // uses OS entropy (/dev/urandom)
-  byte[] bytes = new byte[16];
-  random.nextBytes(bytes);
-  ```
-  `setSeed()` *supplements* randomness (never reduces it). Default seeding usually sufficient.
-
-  #subinline("Secret Key Generation")
-  ```java
-  KeyGenerator keyGen = KeyGenerator.getInstance("AES");
-  keyGen.init(256); // key size: 128, 192, or 256
-  SecretKey key = keyGen.generateKey();
-  // From existing raw bytes:
-  SecretKeySpec keySpec = new SecretKeySpec(rawBytes, "AES");
-  ```
-  Password-based keys are *weak* → use long random data or proper key derivation (PBKDF2).
-
-  #subinline("Symmetric Encryption (Cipher)")
-  `Cipher.getInstance("algo/mode/padding")` → *"AES" alone defaults to AES/ECB/PKCS5Padding!*
-  - *ECB*: Never use! Identical blocks → identical ciphertext (leaks patterns)
-  - *CBC*: + MAC (Message Authentication Code) for integrity
-  - *GCM*: Authenticated (confidentiality + integrity built-in)
-  - *CTR*: Stream mode
-  CBC/GCM/CTR need *IV* (Initialization Vector): random, *never reuse with same key!*
-  - *IV reuse breaks security*: CTR/GCM reuse → XOR of plaintexts recoverable. GCM reuse → auth key leaked, forgery possible.
-  ```java
-  // CBC: needs separate MAC for integrity
-  cipher.init(mode, key, new IvParameterSpec(iv));
-  // GCM: authenticated, 128 = tag bits
-  cipher.init(mode, key, new GCMParameterSpec(128, iv));
-  ```
-  `update()` for chunks, `doFinal()` for final block + padding. \
-  *doFinal resets cipher* → must call `init()` with new IV before reusing!
-
-  #subinline("MAC (Message Authentication Code)")
-  - Keyed hash → verifies integrity *and* authenticity (unlike plain hash)
-  - Attacker can't forge valid MAC without the secret key
-  - Common: HMAC-SHA256, Poly1305
-
-  #subinline("Encrypt-then-MAC vs MAC-then-Encrypt")
-  - *Encrypt-then-MAC* (correct): Encrypt data → MAC the ciphertext
-    - MAC rejects invalid messages *before* decryption (no padding oracle)
-  - *MAC-then-Encrypt* (bad): MAC plaintext → encrypt both → timing attacks possible
-  - *GCM mode*: Built-in authentication, no separate MAC needed
-
-  #subinline("JPA Field Encryption")
-  Encrypt sensitive entity fields at rest using `@Convert`:
-  ```java
-  @Entity class User {
-    @Convert(converter = AESConverter.class)
-    private String creditCard;  // Auto-encrypted on save, decrypted on load
-  }
-  // Converter stores: Base64(IV || Ciphertext)
+  // WRONG: predictable output
+  Random r = new Random();
+  // RIGHT: cryptographically secure
+  SecureRandom r = new SecureRandom();
+  r.nextBytes(new byte[16]);
   ```
 
-  #subinline("Additional Authenticated Data (AAD)")
-  GCM can authenticate header data without encrypting it:
+  #inline("Hashing")
+  One-way function: data → fixed-size digest. Can't reverse, can't find collisions.
   ```java
-  cipher.updateAAD(headerBytes);  // header authenticated but not encrypted
-  cipher.doFinal(payload);        // payload encrypted + authenticated
+  byte[] hash = MessageDigest.getInstance("SHA-256").digest(data);
   ```
-  Use for file headers, metadata that must be readable but tamper-proof.
+  - *Secure:* SHA-256, SHA-512, SHA3-256, SHA3-512
+  - *Insecure:* MD5, SHA-1 (broken, only for backwards compat)
 
-  #subinline("Stream Cipher Specifics")
-  - *CHACHA20*: 12-byte nonce, counter starts at 1: `new ChaCha20ParameterSpec(nonce, 1)`
-  - *RC4*: No IV (stream initialized from key only) → deprecated, don't use for new code
+  #inline("Symmetric Encryption")
+  Same key encrypts and decrypts. Fast, used for bulk data.
 
-  #subinline("Public Key Cryptography")
-  - *Key pair:* `KeyPairGenerator.getInstance("RSA")` → `initialize(2048)` → `generateKeyPair()`
-  - *RSA encryption:* `Cipher.getInstance("RSA/ECB/OAEPPadding")`, encrypt with `pubKey`, decrypt with `privKey`
-    - "ECB" here is just Java naming → RSA encrypts entire message as one block (no chaining like AES ECB)
-    - Limited to key size (2048-bit → max 256 bytes) → use *hybrid encryption* for large data
-  - *Hybrid encryption:* RSA too slow/limited for large data → combine RSA + AES:
-    - Generate random AES session key, encrypt data with AES (fast, unlimited size)
-    - Encrypt AES key with RSA (small, fits in 256 bytes) → send both
-    - `WRAP_MODE` = encrypt a key, `UNWRAP_MODE` = decrypt a key
-    ```java
-    // Sender: encrypt AES key with recipient's public key
-    cipher.init(Cipher.WRAP_MODE, recipientPubKey);
-    byte[] wrappedKey = cipher.wrap(aesSessionKey);
-    // Recipient: decrypt AES key with own private key
-    cipher.init(Cipher.UNWRAP_MODE, myPrivKey);
-    Key aesKey = cipher.unwrap(wrappedKey, "AES", Cipher.SECRET_KEY);
-    ```
-  - *Digital signatures:* `Signature.getInstance("SHA256withRSA")`
-    - Sign: `initSign(privKey)` → `update(data)` → `sign()`
-    - Verify: `initVerify(pubKey)` → `update(data)` → `verify(signature)`
+  #subinline("Key vs IV vs Cipher")
+  - *Key*: The secret (32 bytes for AES-256). Reusable, must stay secret.
+  - *IV*: Randomness (12 bytes for GCM). Fresh per encryption, not secret.
+  - *Cipher*: Algorithm that combines key + IV + plaintext → ciphertext
 
-  #subinline("Loading Keys from Files")
+  *Why IV?* Without it, same plaintext + key always produces same ciphertext → patterns leak.
+
+  #subinline("Cipher Modes")
+  `Cipher.getInstance("algo/mode/padding")` - *AES alone defaults to ECB!*
+  - *ECB*: NEVER use - identical blocks → identical ciphertext
+  - *CBC*: Needs separate MAC for integrity
+  - *GCM*: Authenticated encryption (integrity built-in) - *recommended*
+
+  #subinline("Encrypt / Decrypt Flow")
   ```java
-  // Private key from PKCS#8 DER file
-  byte[] keyBytes = Files.readAllBytes(Path.of("private.der"));
-  PrivateKey privKey = KeyFactory.getInstance("RSA")
-      .generatePrivate(new PKCS8EncodedKeySpec(keyBytes));
-  // Public key from X.509 certificate
-  CertificateFactory cf = CertificateFactory.getInstance("X.509");
-  Certificate cert = cf.generateCertificate(new FileInputStream("cert.pem"));
-  PublicKey pubKey = cert.getPublicKey();
+  // 1. Key - secret, can reuse across encryptions
+  KeyGenerator kg = KeyGenerator.getInstance("AES");
+  kg.init(256);
+  SecretKey key = kg.generateKey();
+
+  // 2. IV - random, MUST be fresh for each encryption
+  byte[] iv = new byte[12];
+  new SecureRandom().nextBytes(iv);
+
+  // 3. Encrypt: key + IV + plaintext → ciphertext
+  Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
+  c.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(128, iv));
+  byte[] ciphertext = c.doFinal(plaintext);
+  // Store: [IV][ciphertext] - need IV for decryption!
+
+  // 4. Decrypt: same key + same IV + ciphertext → plaintext
+  c.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(128, iv));
+  byte[] decrypted = c.doFinal(ciphertext);
   ```
+  - IV reuse with same key → catastrophic (GCM: auth key leaked)
+  - `doFinal()` resets cipher → new `init()` required before reuse
 
-  #subinline("JCA Security Rules")
-  - *Never* use `java.util.Random` for crypto → always `SecureRandom`
-  - *Never* use ECB mode → use CBC+MAC, GCM, or CTR
-  - *RSA padding*: Use `RSA/ECB/OAEPPadding`, not PKCS1 (padding oracle attacks)
-  - *GCM auth tag*: Always 128 bits (`new GCMParameterSpec(128, iv)`)
-  - *IV/Nonce*: Generate randomly with `SecureRandom`, never reuse with same key
-  - *Encrypt-then-MAC*: MAC the ciphertext, not plaintext (or use GCM)
+  #inline("Integrity Protection")
+  Detect if data was modified.
+  - *Hash* (MessageDigest): No key → attacker can modify data and recompute hash!
+  - *MAC* (HMAC): Keyed → attacker can't forge without secret key
 
-  #inline("JSSE (Java Secure Sockets Extension)")
-  TLS sockets for secure communication. TLS 1.2/1.3 enabled by default (1.0/1.1 disabled, SSL not supported).
+  #subinline("Create / Verify MAC")
   ```java
-  SSLSocketFactory sf = (SSLSocketFactory) SSLSocketFactory.getDefault();
-  SSLSocket socket = (SSLSocket) sf.createSocket("host", 443);
-  // Server: SSLServerSocketFactory → SSLServerSocket → accept()
+  // WRONG: hash has no key - attacker can modify + recompute
+  byte[] hash = MessageDigest.getInstance("SHA3-256").digest(data);
+
+  // RIGHT: MAC with secret key
+  Mac mac = Mac.getInstance("HmacSHA256");
+  mac.init(secretKey);
+
+  // 1. Create: data + key → tag
+  byte[] tag = mac.doFinal(data);
+  // Send: [data][tag]
+
+  // 2. Verify: recompute tag, compare
+  mac.init(secretKey);
+  byte[] expectedTag = mac.doFinal(receivedData);
+  boolean valid = MessageDigest.isEqual(expectedTag, receivedTag);
   ```
+
+  #subinline("Encrypt-then-MAC")
+  - *Encrypt-then-MAC* (correct): Encrypt → MAC the ciphertext
+  - *MAC-then-Encrypt* (wrong): Timing attacks possible
+  - *GCM*: Built-in authentication, no separate MAC needed
+
+  #inline("Asymmetric Encryption")
+  Key pair: public key encrypts, private key decrypts. Slow, limited size → used for key exchange, signatures.
+
+  #subinline("Encrypt / Decrypt Flow")
+  ```java
+  // Recipient generates key pair, shares public key
+  KeyPairGenerator kpg = KeyPairGenerator.getInstance("RSA");
+  kpg.initialize(2048);
+  KeyPair kp = kpg.generateKeyPair();
+  PublicKey recipientPub = kp.getPublic();   // share this
+  PrivateKey recipientPriv = kp.getPrivate(); // keep secret!
+
+  // Sender: encrypt with recipient's PUBLIC key
+  Cipher c = Cipher.getInstance("RSA/ECB/OAEPPadding"); // NOT PKCS1!
+  c.init(Cipher.ENCRYPT_MODE, recipientPub);
+  byte[] encrypted = c.doFinal(data); // max ~256 bytes for 2048-bit key
+
+  // Recipient: decrypt with own PRIVATE key
+  c.init(Cipher.DECRYPT_MODE, recipientPriv);
+  byte[] decrypted = c.doFinal(encrypted);
+  ```
+  - *PKCS1Padding*: Vulnerable to padding oracle → use *OAEPPadding*
+  - RSA limited to key size → use *hybrid encryption* for large data
+
+  #subinline("Hybrid Encryption")
+  RSA too slow/limited for large data → use AES for data, RSA for AES key.
+  ```java
+  // SENDER: encrypt large data
+  // 1. Generate random AES key + IV
+  KeyGenerator kg = KeyGenerator.getInstance("AES");
+  kg.init(256);
+  SecretKey aesKey = kg.generateKey();
+  byte[] iv = new byte[12];
+  new SecureRandom().nextBytes(iv);
+
+  // 2. Encrypt data with AES (fast, unlimited size)
+  Cipher aesCipher = Cipher.getInstance("AES/GCM/NoPadding");
+  aesCipher.init(Cipher.ENCRYPT_MODE, aesKey, new GCMParameterSpec(128, iv));
+  byte[] encryptedData = aesCipher.doFinal(largeData);
+
+  // 3. Wrap AES key with recipient's RSA public key
+  Cipher rsaCipher = Cipher.getInstance("RSA/ECB/OAEPPadding");
+  rsaCipher.init(Cipher.WRAP_MODE, recipientPubKey);
+  byte[] wrappedKey = rsaCipher.wrap(aesKey);
+  // Send: [wrappedKey][iv][encryptedData]
+
+  // RECIPIENT: decrypt
+  // 1. Unwrap AES key with own RSA private key
+  rsaCipher.init(Cipher.UNWRAP_MODE, recipientPrivKey);
+  Key aesKey = rsaCipher.unwrap(wrappedKey, "AES", Cipher.SECRET_KEY);
+
+  // 2. Decrypt data with AES
+  aesCipher.init(Cipher.DECRYPT_MODE, aesKey, new GCMParameterSpec(128, iv));
+  byte[] decrypted = aesCipher.doFinal(encryptedData);
+  ```
+
+  #subinline("Digital Signatures")
+  Prove authenticity (only private key holder could sign) + integrity (detects modification). Unlike MAC, verifier doesn't need secret key.
+  ```java
+  Signature sig = Signature.getInstance("SHA256withRSA");
+
+  // Sender: sign with PRIVATE key
+  sig.initSign(privateKey);
+  sig.update(data);
+  byte[] signature = sig.sign();
+  // Send: [data][signature]
+
+  // Recipient: verify with sender's PUBLIC key
+  sig.initVerify(publicKey);
+  sig.update(data);
+  boolean valid = sig.verify(signature);
+  ```
+
+  #inline("JSSE (TLS)")
+  Java's TLS implementation. Encrypted channel + authentication via certificates.
 
   #subinline("Keystore vs Truststore")
-  - *Keystore*: Own private key + certificate → used to authenticate *yourself* to others
-  - *Truststore*: Trusted CA certificates (no private keys) → used to verify *peer's* certificate
-  - *Server* needs keystore (prove identity to clients), *client* needs truststore (verify server)
-  - *Mutual TLS*: Both sides need keystore AND truststore (`setNeedClientAuth(true)`)
-  - Default truststore `$JAVA_HOME/lib/security/cacerts` contains official CA certs → public HTTPS works out of box
+  - *Keystore*: Your private key + certificate → prove *your* identity to others
+  - *Truststore*: Certificates you trust → verify *others'* identity
 
-  #subinline("keytool (CLI for keystores)")
-  - *Generate keypair:* `keytool -genkeypair -keyalg rsa -keysize 2048 -keystore ks.p12 -storetype PKCS12 -alias mykey`
-  - *Export cert:* `keytool -exportcert -keystore ks.p12 -alias mykey -file cert.cer`
-  - *Import cert to truststore:* `keytool -importcert -keystore ts.p12 -file cert.cer -alias peer`
-  - *Run with stores:* `java -Djavax.net.ssl.keyStore=ks.p12 -Djavax.net.ssl.keyStorePassword=pw ...`
+  *Who needs what:*
+  - *Server*: Keystore (to prove identity to clients)
+  - *Client*: Truststore (to verify server is legit)
+  - *Mutual TLS*: Both need keystore AND truststore (both sides authenticate)
 
-  #subinline("SSLContext (Programmatic Config)")
-  Alternative to `-D` flags: configure TLS in code (for fine-grained control, mutual TLS, etc.). \
-  Build from: *KeyManagerFactory* (own keys) + *TrustManagerFactory* (trusted certs)
+  #subinline("keytool CLI")
+  ```bash
+  keytool -genkeypair -keyalg RSA -keysize 2048 -keystore ks.p12 -alias mykey
+  keytool -exportcert -keystore ks.p12 -alias mykey -file cert.cer
+  keytool -importcert -keystore ts.p12 -file cert.cer -alias peer
+  ```
+
+  #subinline("SSLContext Setup")
   ```java
+  // 1. Load keystore (your private key + cert)
+  KeyStore ks = KeyStore.getInstance("PKCS12");
+  ks.load(new FileInputStream("keystore.p12"), "password".toCharArray());
+
+  // 2. Load truststore (certs you trust)
+  KeyStore ts = KeyStore.getInstance("PKCS12");
+  ts.load(new FileInputStream("truststore.p12"), "password".toCharArray());
+
+  // 3. Init key manager (your identity)
   KeyManagerFactory kmf = KeyManagerFactory.getInstance("PKIX");
-  kmf.init(keyStore, password);  // load own private key
+  kmf.init(ks, "password".toCharArray());
+
+  // 4. Init trust manager (who you trust)
   TrustManagerFactory tmf = TrustManagerFactory.getInstance("PKIX");
-  tmf.init(trustStore);          // load trusted certs
+  tmf.init(ts);
+
+  // 5. Create SSL context
   SSLContext ctx = SSLContext.getInstance("TLSv1.3");
   ctx.init(kmf.getKeyManagers(), tmf.getTrustManagers(), null);
+
+  // 6. Use it
+  SSLSocketFactory sf = ctx.getSocketFactory();
+  SSLSocket socket = (SSLSocket) sf.createSocket("host", 443);
   ```
 ])
 
