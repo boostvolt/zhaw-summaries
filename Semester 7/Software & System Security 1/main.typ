@@ -369,7 +369,6 @@
   - *Base Pointer (rbp)*: "Where did my frame start?" → stays fixed, access local vars via offsets (`rbp-4`, `rbp-8`)
   - *old rbp*: Saved so caller's frame can be restored after return
   - *return address*: Where to jump back after function completes
-  - Frame layout (low → high): `[local vars] [old rbp] [ret addr]`
 
   #image("assets/stack-frame-main.png")
   #image("assets/stack-frame-area.png")
@@ -446,34 +445,32 @@
   #subinline("Heap Read Overflow (Heartbleed)")
   Different from stack overflow: *read* beyond buffer, not write.
   ```c
-  // readRequest(): packet = [header:4B][payloadLen:2B][payload][padding]
-  unsigned int reqLen = readPacketHeader(csd);  // trusted length from header
-  unsigned char* req = malloc(reqLen);          // allocate exactly reqLen
-  recv(csd, req, reqLen, 0);                    // receive reqLen bytes
+  // Packet: [payloadLen:2B][payload:N bytes] - client claims N bytes
+  unsigned int reqLen = readPacketHeader(csd);  // actual packet size
+  unsigned char* req = malloc(reqLen);
+  recv(csd, req, reqLen, 0);
 
-  // sendResponse(): BUG - trusts payloadLen from client!
-  unsigned short payloadLen = 256*req[0] + req[1];  // read first 2 bytes
-  send(csd, req, 2 + payloadLen, 0);  // sends 2 + payloadLen bytes!
+  // BUG: trusts payloadLen without checking against reqLen!
+  unsigned short payloadLen = 256*req[0] + req[1];  // client-controlled
+  send(csd, req, 2 + payloadLen, 0);                // echo "payload" back
   ```
-  *Bug*: `payloadLen` read from request, not validated against `reqLen`. If `payloadLen > reqLen - 2` → reads beyond allocated buffer.
-
-  *Attack*: Send `reqLen=3` (2B length + 1B payload) but set `payloadLen=65535` → server sends 65KB from heap.
+  *Attack*: Send 3 bytes total: `[payloadLen=65535][1 byte]`. Server allocates 3B, sends `2+65535` → reads 65KB past buffer.
 
   *Why sensitive data exists*: `malloc()` reuses freed memory. Previous requests (credentials) `free()`d but data remains → new request at same address → old data leaked.
 
   *Why protections don't help*: Heap (no stack), read-only (no write), sequential (no address guess). Fix: `if (payloadLen > reqLen - 2) reject();`
 
   #subinline("Format String Vulnerability")
-  *How printf works*: Params 1-6 via registers (rdi, rsi, rdx, rcx, r8, r9), stored on printf's stack. Params 7+ read directly from *caller's stack frame*. Printf doesn't know how many params were actually passed → reads stack regardless.
+  *How printf works*: x86-64 passes first 6 args in registers (rdi=format string, rsi-r9=format args 1-5). Args 7+ come from caller's stack. Printf doesn't know how many args were passed → reads stack regardless.
 
   *Bug: User controls format string*
   ```c
   printf(username);        // VULNERABLE: attacker controls format
   printf("%s", username);  // SAFE: format string is fixed
   ```
-  *Attack*: Enter username `%p%p%p%p%p%p` → printf expects 6 pointer params, reads from stack:
-  - Params 1-5: from printf's own stack frame
-  - Param 6+: from *caller's* (doLogin) stack frame → leaks local vars, canary, rbp
+  *Attack*: Enter username `%p%p%p%p%p%p` → printf expects 6 pointer params:
+  - `%p` #1-5: from registers (rsi-r9), saved in printf's stack frame
+  - `%p` #6+: from *caller's* stack frame → leaks local vars, canary, rbp
 
   Use `%n$p` for direct access: `%12$p` reads 12th parameter position.
 
@@ -487,10 +484,13 @@
 
   *Why protections don't help*: Reading memory, not writing. Canaries/ASLR/NX irrelevant. Fix: Always use fixed format string.
 
-  #subinline("Why Problem NOT Solved")
+  #subinline("Limitations of Protections")
   - Protection features not always enabled/available (embedded, mobile, sensors)
   - *Read overflows* not prevented → reading past buffer leaks secrets (Heartbleed, format strings)
-  - *ROP (Return-Oriented Programming)* bypasses NX: chain existing code snippets ("gadgets") ending in `ret` to build arbitrary computation without injecting new code
+  - *ROP (Return-Oriented Programming)* bypasses NX: don't inject code, reuse existing code
+    - "Gadget" = few instructions ending in `ret` (e.g., `pop rdi; ret`)
+    - Overflow stack with gadget addresses → each `ret` pops next address and jumps there
+    - Goal: chain gadgets to set up args → jump to `system()` in libc → `system("/bin/sh")` → shell
   - Detection = termination → *availability* impact
   - *Conclusion*: Prevent in code, treat protections as second line of defense (defense in depth)
 
@@ -502,35 +502,34 @@
 
   #subinline("Thread-Based Race Condition")
   ```java
-  private static String sessionID;  // Shared!
+  // VULNERABLE: shared static variable
+  private static String sessionID;
   public static void create() { sessionID = generateRandom(); }
   public static String get() { return sessionID; }
+  // Race: A.create() → B.create() → A.get() → A gets B's session!
+
+  // FIXED: return directly, no shared state
+  public static String create() { return generateRandom(); }
   ```
-  Race: A creates → B creates → A gets → *gets B's ID* → two users share session
-
-  Fix: Return ID directly from create(), don't use shared variable
-
-  Also: `Random` not cryptographically secure → use `SecureRandom` (predictable output enables session hijacking)
+  Also: `Random` not cryptographically secure → use `SecureRandom`
 
   #subinline("TOCTOU (Time-of-Check, Time-of-Use)")
+  Gap between checking permission and using resource → attacker swaps resource in between.
   ```c
-  if(!access(file, W_OK)) {    // Check: user has write access?
-    fgets(data, 100, stdin);
-    fd = fopen(file, "w+");    // Use: open file for writing
+  // VULNERABLE: check and use are separate operations on filename
+  if (!access(file, W_OK)) {   // CHECK: can user write to file?
+    // ← WINDOW: attacker swaps symlink here!
+    fd = fopen(file, "w+");    // USE: opens whatever file points to NOW
     fprintf(fd, "%s", data);
   }
-  ```
-  Attack (program runs as root):
-  1. Create file `dummy`, symlink `pointer → dummy`
-  2. Start program, pass `pointer` as file
-  3. After access() check passes, before fopen(): `rm pointer; ln -s /etc/shadow pointer`
-  4. Program writes to `/etc/shadow` → attacker gains write access to any file
 
-  *Countermeasures:*
-  - Minimize functions taking filename as input. Use file once → get *file descriptor* for further ops
-  - Open file first, then check access rights on file descriptor (not path)
-  - Let OS handle permission checks, avoid running programs as root
-  - If must run with high privileges → think especially hard about security
+  // FIXED: open first, then check on file descriptor (atomic)
+  fd = fopen(file, "w+");
+  if (fstat(fd, &st) == 0 && checkPermissions(st)) { ... }
+  ```
+  *Attack* (setuid root program): User passes symlink `ptr → dummy`. After check passes, swap to `ptr → /etc/shadow`. Program writes to shadow file as root.
+
+  *Fix*: Open file once → use file descriptor for all further ops (can't be swapped).
 ])
 
 = Fundamental Security Principles (SDL 1, 2 & 3)
