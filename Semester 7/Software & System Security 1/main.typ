@@ -1549,10 +1549,11 @@
   *Other*: ` ` → `%20` | `%` → `%25` | `&` → `%26` | `#` → `%23` \
   *Rule*: Decode BEFORE validation, never after!
 
+// TODO: go through
   #inline("Shell Metacharacters")
-  - *Separators*: `;` (chain) | `|` (pipe) | `&` (background) | `&&`/`||` (conditional)
+  - *Separators*: `;` (chain) | `|` (pipe) | `&` (background) | `&&` (if success) | `||` (if fail)
   - *Substitution*: ``` ` ` ``` or `$()` executes command, inserts output
-  - *Redirection*: `>` `<` `>>` (write/read/append files)
+  - *Redirection*: `>` (write to file) | `<` (read from file) | `>>` (append to file)
   - *Quoting*: `"` `'` (escape context) | `\` (escape char)
   - *Variables*: `$VAR` or `${VAR}` expands variable value
 
