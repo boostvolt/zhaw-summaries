@@ -192,8 +192,7 @@
     ]>
     <order><name>&xxe;</name></order>
     ```
-  // TODO: What is exfil?
-  - *Result*: File read, SSRF (`http://localhost/admin`), or blind exfil to attacker server
+  - *Result*: File read, SSRF (`http://localhost/admin`), or blind exfiltration (server sends data to `http://attacker.com/?d=...`)
   - *Counter*: Disable DTD: `dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);`
 
   #inline("Authentication & Session")
@@ -204,11 +203,10 @@
     - *Counter*: Vague error messages ("Login failed"), CAPTCHA on account creation
   - *Online brute-force*:
     - *Prerequisite*: Unlimited login attempts without account lockout
-    - *Brute force*: Many passwords against ONE user (triggers lockout)
+    - *Brute force*: Many passwords against ONE user
     - *Password spraying*: ONE password against MANY users (evades per-user lockout, catches weak passwords like "Password1")
     - Find valid credentials: Look for *outliers* (different status code or response length)
-    // TODO: Why not lock accounts?
-    - *Counter*: Rate limiting (e.g., 60s delay after 3 failures). Do NOT lock accounts → enables DoS (Denial of Service). Enforce password quality + check against common password lists
+    - *Counter*: Username-based rate limiting (delay, not full lock). Enforce password quality + check against common password lists
   - *Password reset*: Security questions often guessable/findable, can chain weak resets across providers
     - *Counter*: No self-service reset for high-value apps, hard security questions, temp password/link to registered email (valid once, short expiry)
 
@@ -336,7 +334,6 @@
   *Recommendation*: Use both tool types for coverage, but *manual testing is king* for real security
 ])
 
-// TODO: go through
 = Buffer Overflow & Race Conditions (SDL 4)
 
 #concept-block(body: [
@@ -829,10 +826,10 @@
   ```
 
   #inline("Authentication Mechanisms")
-  // TODO: restructure?
   #subinline("HTTP BASIC")
-  Server returns 401 → browser shows dialog → credentials in `Authorization: Basic <base64>` header on *every* request. \
-  *Limitation:* No logout without closing browser (credentials cached).
+  - *Flow:* Server returns 401 → browser shows dialog → sends `Authorization: Basic <base64>` on every request
+  - *Security:* base64 is encoding, NOT encryption → requires HTTPS
+  - *Limitation:* No logout without closing browser (credentials cached)
 
   #subinline("FORM-based (Preferred)")
   - *Flow:* Form POST → server validates → stores user/role in session → session ID in cookie
