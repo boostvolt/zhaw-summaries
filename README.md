@@ -13,6 +13,7 @@ Collection of summaries from my computer science studies at the ZHAW School of E
 ## 2. Semester
 - [Analysis 2](Semester%202/Analysis%202.pdf)
 - [Lineare Algebra](Semester%202/Lineare%20Algebra.pdf)
+- [Theoretische Informatik](Semester%202/Theoretische%20Informatik.pdf)
 - [Programmieren 2](https://boostvolt.notion.site/Programmieren-2-79e40c67622d40dc828c1442f042b2e6)
 
 ## 3. Semester
