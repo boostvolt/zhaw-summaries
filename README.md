@@ -17,18 +17,18 @@ Collection of summaries from my computer science studies at the ZHAW School of E
 - [Programmieren 2](https://boostvolt.notion.site/Programmieren-2-79e40c67622d40dc828c1442f042b2e6)
 
 ## 3. Semester
-- [Höhere Mathematik 1](Semester%203/H%C3%B6here%20Mathematik%201.pdf)
+- [Höhere Mathematik 1](Semester%203/Höhere%20Mathematik%201.pdf)
 - [Stochastik und Statistik](Semester%203/Stochastik%20und%20Statistik.pdf)
 - [Datenbanken](https://boostvolt.notion.site/Datenbanken-c10c3c34cd4748f6b9f6ea469a635de3)
 - [Elektrotechnik und Digitaltechnik](https://boostvolt.notion.site/Elektrotechnik-und-Digitaltechnik-ba3941551b2044e2a12d2d53a673bf94)
 - [Algorithmen und Datenstrukturen](https://boostvolt.notion.site/Algorithmen-und-Datenstrukturen-a06df255e70e48d5aa96a7d6f8b454c2)
 
 ## 4. Semester
-- [Höhere Mathematik 2](Semester%204/H%C3%B6here%20Mathematik%202.pdf)
+- [Höhere Mathematik 2](Semester%204/Höhere%20Mathematik%202.pdf)
 - [Kommunikationstechnik](Semester%204/Kommunikationstechnik.pdf)
 - [Software Entwicklung 1](Semester%204/Software%20Engineering%201)
 - [Systemnahe Programmierung](Semester%204/Systemnahe%20Programmierung)
-- [Wirtschaft für Ingenieure](Semester%204/Wirtschaft%20f%C3%BCr%20Ingenieure)
+- [Wirtschaft für Ingenieure](Semester%204/Wirtschaft%20für%20Ingenieure/)
 
 ## 5. Semester
 - [Computertechnik 1](Semester%205/Computer%20Engineering%201)
