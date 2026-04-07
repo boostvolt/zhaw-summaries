@@ -28,7 +28,7 @@ Collection of summaries from my computer science studies at the ZHAW School of E
 - [Kommunikationstechnik](Semester%204/Kommunikationstechnik.pdf)
 - [Software Entwicklung 1](Semester%204/Software%20Engineering%201)
 - [Systemnahe Programmierung](Semester%204/Systemnahe%20Programmierung)
-- [Wirtschaft für Ingenieure](Semester%204/Wirtschaft%20für%20Ingenieure/)
+- [Wirtschaft für Ingenieure](Semester%204/Wirtschaft%20für%20Ingenieure)
 
 ## 5. Semester
 - [Computertechnik 1](Semester%205/Computer%20Engineering%201)
